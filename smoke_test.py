@@ -86,7 +86,7 @@ assert_(r.status_code == 200, f"missing_out should 200, got {r.status_code}")
 # 12) Counts page and count submission
 r = client.get('/counts')
 assert_(r.status_code == 200, f"counts page should 200, got {r.status_code}")
-r = client.post('/counts/01', data={'bracelets':0,'rings':0,'earrings':0,'necklaces':0,'notes':'test'}, follow_redirects=True)
+r = client.post('/counts/01', data={'bracelets':0,'rings':0,'earrings':0,'necklaces':0,'other':0,'notes':'test'}, follow_redirects=True)
 assert_(r.status_code == 200, f"count_case post should 200, got {r.status_code}")
 
 # 13) History page loads and export history csv works

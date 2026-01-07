@@ -12,11 +12,9 @@
       <div class="d-flex gap-2 flex-wrap mt-2">
         <span class="chip">UPCs: <strong class="text-white">{{ totals.distinct_upcs }}</strong></span>
         <span class="chip">Units: <strong class="text-white">{{ totals.total_qty }}</strong></span>
-<span class="chip">Bracelets: <strong class="text-white">{{ type_totals.bracelets }}</strong></span>
-<span class="chip">Rings: <strong class="text-white">{{ type_totals.rings }}</strong></span>
-<span class="chip">Earrings: <strong class="text-white">{{ type_totals.earrings }}</strong></span>
-<span class="chip">Necklaces: <strong class="text-white">{{ type_totals.necklaces }}</strong></span>
-        <span class="chip">Other: <strong class="text-white">{{ type_totals.other }}</strong></span>
+        {% for cat in count_categories %}
+          <span class="chip">{{ cat.plural }}: <strong class="text-white">{{ type_totals[cat.count_key] }}</strong></span>
+        {% endfor %}
         <a class="chip text-decoration-none" href="{{ url_for('export_case', case_code=case.case_code) }}">Export Case CSV</a>
       </div>
       {% if type_totals.unknown and type_totals.unknown > 0 %}
@@ -25,11 +23,9 @@
       {% if last_count %}
         <div class="mt-2 text-white-50 small">
           Today\'s physical count ({{ last_count.local_date|mmddyyyy }}):
-          Bracelets <span class="mono">{{ last_count.bracelets }}</span>,
-          Rings <span class="mono">{{ last_count.rings }}</span>,
-          Earrings <span class="mono">{{ last_count.earrings }}</span>,
-          Necklaces <span class="mono">{{ last_count.necklaces }}</span>,
-          Other <span class="mono">{{ last_count.other }}</span>,
+          {% for cat in count_categories %}
+            {{ cat.plural }} <span class="mono">{{ last_count[cat.count_key] }}</span>{% if not loop.last %},{% endif %}
+          {% endfor %},
           Total <span class="mono">{{ last_count.total }}</span>
           {% if last_count.username %} — by {{ last_count.username }}{% endif %}
         </div>

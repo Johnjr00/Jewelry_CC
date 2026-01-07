@@ -21,10 +21,9 @@
   <div class="glass-soft p-3 p-md-4 mb-3">
     <div class="fw-bold fs-5 mb-2">System (live) totals</div>
     <div class="d-flex flex-wrap gap-2">
-      <span class="chip">Bracelets: <strong class="text-white">{{ sys.bracelets }}</strong></span>
-      <span class="chip">Rings: <strong class="text-white">{{ sys.rings }}</strong></span>
-      <span class="chip">Earrings: <strong class="text-white">{{ sys.earrings }}</strong></span>
-      <span class="chip">Necklaces: <strong class="text-white">{{ sys.necklaces }}</strong></span>
+      {% for cat in count_categories %}
+        <span class="chip">{{ cat.plural }}: <strong class="text-white">{{ sys[cat.count_key] }}</strong></span>
+      {% endfor %}
       <span class="chip">Total: <strong class="text-white">{{ sys.total }}</strong></span>
       {% if sys.unknown and sys.unknown > 0 %}
         <span class="chip">Unknown type: <strong class="text-white">{{ sys.unknown }}</strong></span>
@@ -46,31 +45,19 @@
     <div class="fw-bold fs-5">Enter physical count</div>
 
     <div class="row g-3">
-      <div class="col-6 col-md-3">
-        <label class="form-label text-white-50">Bracelets</label>
-        <input class="form-control" type="number" min="0" name="bracelets" id="bracelets" value="0" required>
-      </div>
-      <div class="col-6 col-md-3">
-        <label class="form-label text-white-50">Rings</label>
-        <input class="form-control" type="number" min="0" name="rings" id="rings" value="0" required>
-      </div>
-      <div class="col-6 col-md-3">
-        <label class="form-label text-white-50">Earrings</label>
-        <input class="form-control" type="number" min="0" name="earrings" id="earrings" value="0" required>
-      </div>
-      <div class="col-6 col-md-3">
-        <label class="form-label text-white-50">Necklaces</label>
-        <input class="form-control" type="number" min="0" name="necklaces" id="necklaces" value="0" required>
-      </div>
-      <div class="col-6 col-md-3">
-        <label class="form-label text-white-50">Other</label>
-        <input class="form-control" type="number" min="0" name="other" id="other" value="0" required>
-      </div>
+      {% for cat in count_categories %}
+        <div class="col-6 col-md-3">
+          <label class="form-label text-white-50">{{ cat.plural }}</label>
+          <input class="form-control" type="number" min="0" name="{{ cat.count_key }}" id="{{ cat.count_key }}" value="0" required>
+        </div>
+      {% endfor %}
     </div>
 
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
       <div class="chip">Total: <strong class="text-white" id="totalOut">0</strong></div>
-      <div class="text-white-50 small">Total auto-calculates (Bracelets + Rings + Earrings + Necklaces).</div>
+      <div class="text-white-50 small">
+        Total auto-calculates ({% for cat in count_categories %}{{ cat.plural }}{% if not loop.last %} + {% endif %}{% endfor %}).
+      </div>
     </div>
 
     <div>
@@ -86,7 +73,7 @@
 </div>
 
 <script>
-  const ids = ["bracelets","rings","earrings","necklaces","other"];
+  const ids = [{% for cat in count_categories %}"{{ cat.count_key }}"{% if not loop.last %}, {% endif %}{% endfor %}];
   function calc(){
     let t = 0;
     for (const id of ids) t += parseInt(document.getElementById(id).value || "0", 10);
