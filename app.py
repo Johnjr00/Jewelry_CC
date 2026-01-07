@@ -27,6 +27,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = APP_DIR / "inventory.db"
 ACTIVITY_LOG_TEMPLATE = os.path.join(os.path.dirname(__file__), "MASTER ACTIVITY LOG.xlsx")
+DAILY_COUNT_TEMPLATE = os.path.join(os.path.dirname(__file__), "Daily Count Sheet.xlsx")
 
 NEW_RECEIPTS_CODE = "NEW-RECEIPTS"
 NEW_RECEIPTS_NAME = "New Receipts (Virtual)"
@@ -587,6 +588,78 @@ def build_daily_activity_workbook(case_code: str, local_date: str):
 
     # Clear any leftover values below the filled region within the visible table area (optional)
     # Keep formatting intact.
+    return wb
+
+def build_daily_count_workbook(case_code: str, local_date: str):
+    """Return an openpyxl workbook for the given case and local_date (YYYY-MM-DD) using Daily Count Sheet template."""
+    template_path = DAILY_COUNT_TEMPLATE
+    if not os.path.exists(template_path):
+        alt = os.path.join(os.path.dirname(__file__), "Daily Count Sheet.xlsx")
+        if os.path.exists(alt):
+            template_path = alt
+
+    wb = openpyxl.load_workbook(template_path)
+    ws = wb.active
+
+    try:
+        dt = datetime.fromisoformat(local_date)
+    except Exception:
+        dt = store_now()
+
+    day_name = dt.strftime("%A").upper()
+    date_display = dt.strftime("%m/%d/%Y")
+
+    weekday_rows = {
+        "SUNDAY": 5,
+        "MONDAY": 15,
+        "TUESDAY": 25,
+        "WEDNESDAY": 35,
+        "THURSDAY": 45,
+        "FRIDAY": 55,
+        "SATURDAY": 65,
+    }
+    start_row = weekday_rows.get(day_name, 5)
+
+    ws[f"A{start_row}"].value = f"{day_name} - TODAY'S DATE:   {date_display}"
+    ws[f"Q{start_row}"].value = f"CASE # {case_code}"
+    ws[f"F{start_row + 3}"].value = date_display
+
+    db = get_db()
+    count = db.execute(
+        """
+        SELECT *
+        FROM case_counts
+        WHERE case_code=? AND local_date=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (case_code, local_date),
+    ).fetchone()
+
+    if count:
+        row_map = {
+            "necklaces": start_row + 3,
+            "earrings": start_row + 4,
+            "rings": start_row + 5,
+            "bracelets": start_row + 6,
+            "other": start_row + 7,
+        }
+        for key, row in row_map.items():
+            value = int(count[key])
+            ws.cell(row, 10).value = value
+            ws.cell(row, 12).value = value
+
+        total = int(count["total"])
+        ws.cell(start_row + 5, 6).value = total
+
+        initials = _initials_from_username(count["username"] or "")
+        if initials:
+            ws.cell(start_row + 7, 6).value = initials
+
+        notes = (count["notes"] or "").strip()
+        if notes:
+            ws.cell(start_row + 3, 20).value = notes
+
     return wb
 
 @app.route("/counts")
@@ -1844,6 +1917,39 @@ def download_daily_activity_report(case_code):
 
     safe_date = date_q.replace("-", "")
     filename = f"Daily_Activity_{case_code}_{safe_date}.xlsx"
+    return send_file(
+        bio,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route("/reports/daily-counts/<case_code>.xlsx")
+@login_required
+def download_daily_count_report(case_code):
+    date_q = request.args.get("date") or local_date_str()
+    if re.match(r"^\d{2}/\d{2}/\d{4}$", date_q):
+        mm, dd, yyyy = date_q.split("/")
+        date_q = f"{yyyy}-{mm}-{dd}"
+
+    db = get_db()
+    c = db.execute(
+        "SELECT case_code, case_name FROM cases WHERE case_code = ? AND is_active = 1",
+        (case_code,),
+    ).fetchone()
+    if not c:
+        abort(404)
+
+    wb = build_daily_count_workbook(case_code, date_q)
+
+    import io
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+
+    safe_date = date_q.replace("-", "")
+    filename = f"Daily_Count_{case_code}_{safe_date}.xlsx"
     return send_file(
         bio,
         as_attachment=True,
