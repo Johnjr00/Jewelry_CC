@@ -1516,7 +1516,11 @@ def sell():
 
     if request.method == "POST":
         upc = (request.form.get("upc") or "").strip()
-        qty = int(request.form.get("qty") or "1")
+        try:
+            qty = int((request.form.get("qty") or "1").strip())
+        except ValueError:
+            flash("Qty must be a whole number greater than 0.", "danger")
+            return redirect(url_for("sell"))
         case_code = (request.form.get("case_code") or "").strip() or None
 
         if not upc or qty <= 0:
@@ -1570,7 +1574,11 @@ def missing():
 
     if request.method == "POST":
         upc = (request.form.get("upc") or "").strip()
-        qty = int(request.form.get("qty") or "1")
+        try:
+            qty = int((request.form.get("qty") or "1").strip())
+        except ValueError:
+            flash("Qty must be a whole number greater than 0.", "danger")
+            return redirect(url_for("missing"))
         case_code = (request.form.get("case_code") or "").strip() or None
         notes = (request.form.get("notes") or "").strip() or None
 
