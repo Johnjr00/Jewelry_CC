@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="glass p-3 p-md-4" style="max-width: 1200px;">
+  <div class="fw-bold fs-4">Move Inventory</div>
+  <div class="text-white-50 mb-3">
+    Select a <strong>From</strong> case to load its current items, then pick what to move (no scanning needed).
+    You can still scan UPCs as an optional backup.
+  </div>
+
+  <form method="post" class="row g-3" id="moveForm">
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50">From Case</label>
+      <select class="form-select" name="from_case_code" id="fromCase" required>
+        {% for c in active_cases %}
+          <option value="{{ c.case_code }}" {% if c.case_code == new_receipts_code %}selected{% endif %}>
+            {{ c.case_code }} — {{ c.case_name }}{% if c.is_virtual %} (Virtual){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+      <div class="text-white-50 small mt-2">Changing this reloads the list below.</div>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50">To Case</label>
+      <select class="form-select" name="to_case_code" id="toCase" required>
+        <option value="">Choose…</option>
+        {% for c in active_cases %}
+          <option value="{{ c.case_code }}">
+            {{ c.case_code }} — {{ c.case_name }}{% if c.is_virtual %} (Virtual){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-12">
+      <label class="form-label text-white-50">Description (optional)</label>
+      <input class="form-control" name="description" placeholder="If provided, fills blank product descriptions">
+    </div>
+
+    <!-- Picker -->
+    <div class="col-12">
+      <div class="glass-soft p-3 p-md-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div>
+            <div class="fw-bold fs-5">Pick items from the From case</div>
+            <div class="text-white-50">Check an item and set the quantity to move (max = qty in the case).</div>
+          </div>
+          <input id="pickFilter" class="form-control" style="max-width: 420px;"
+                 placeholder="Filter by UPC, type, or description…">
+        </div>
+
+        <div class="my-3 divider"></div>
+
+        <div id="pickerLoading" class="text-white-50">Loading items…</div>
+
+        <div class="table-responsive" id="pickerTableWrap" style="display:none;">
+          <table class="table table-sm table-hover align-middle mb-0" id="pickerTable">
+            <thead>
+              <tr>
+                <th style="width: 90px;">Move</th>
+                <th style="width: 170px;">UPC</th>
+                <th style="width: 120px;">Type</th>
+                <th>Description</th>
+                <th class="text-end" style="width: 90px;">Have</th>
+                <th class="text-end" style="width: 130px;">Qty to move</th>
+              </tr>
+            </thead>
+            <tbody id="pickerBody"></tbody>
+          </table>
+        </div>
+
+        <div id="pickerEmpty" class="text-white-50" style="display:none;">This case is empty.</div>
+
+        <div class="d-flex flex-wrap gap-2 mt-3 align-items-center justify-content-between">
+          <div class="text-white-50 small">
+            Tip: You can combine picks + scans. The system adds them together.
+          </div>
+          <div class="chip" id="pickedSummary">Selected: <strong class="text-white ms-1">0</strong> unit(s)</div>
+        </div>
+
+        <!-- Filled by picker as UPC,qty lines -->
+        <textarea class="d-none" name="upcs_picked" id="upcsPicked"></textarea>
+      </div>
+    </div>
+
+    <!-- Optional scanner input -->
+    <div class="col-12">
+      <div class="glass-soft p-3 p-md-4">
+        <div class="fw-bold fs-5">Scan / Enter (optional)</div>
+        <div class="text-white-50 mb-2">One UPC per line, or <span class="mono">UPC,qty</span>.</div>
+        <textarea class="form-control mono" name="upcs" rows="7" placeholder="Scan UPCs here…"></textarea>
+      </div>
+    </div>
+
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-light">Move</button>
+      <a class="btn btn-outline-light" href="{{ url_for('index') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+  const fromCase = document.getElementById("fromCase");
+  const pickFilter = document.getElementById("pickFilter");
+  const pickerLoading = document.getElementById("pickerLoading");
+  const pickerTableWrap = document.getElementById("pickerTableWrap");
+  const pickerBody = document.getElementById("pickerBody");
+  const pickerEmpty = document.getElementById("pickerEmpty");
+  const upcsPicked = document.getElementById("upcsPicked");
+  const pickedSummary = document.getElementById("pickedSummary");
+
+  function esc(s){
+    return (s || "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
+  }
+
+  function updatePickedTextarea(){
+    const lines = [];
+    let total = 0;
+
+    for (const row of pickerBody.querySelectorAll("tr")) {
+      const upc = row.getAttribute("data-upc");
+      const qtyInput = row.querySelector("input[data-role='qty']");
+      const check = row.querySelector("input[data-role='check']");
+      if (!upc || !qtyInput || !check) continue;
+
+      const qty = parseInt(qtyInput.value || "0", 10);
+      if (check.checked && qty > 0) {
+        lines.push(`${upc},${qty}`);
+        total += qty;
+      }
+    }
+    upcsPicked.value = lines.join("\n");
+    pickedSummary.innerHTML = `Selected: <strong class="text-white ms-1">${total}</strong> unit(s)`;
+  }
+
+  function renderPicker(items){
+    pickerBody.innerHTML = "";
+    if (!items || items.length === 0) {
+      pickerLoading.style.display = "none";
+      pickerTableWrap.style.display = "none";
+      pickerEmpty.style.display = "block";
+      upcsPicked.value = "";
+      pickedSummary.innerHTML = `Selected: <strong class="text-white ms-1">0</strong> unit(s)`;
+      return;
+    }
+
+    for (const it of items) {
+      const have = parseInt(it.qty || 0, 10);
+      const tr = document.createElement("tr");
+      tr.setAttribute("data-upc", it.upc);
+      tr.innerHTML = `
+        <td><input type="checkbox" class="form-check-input" data-role="check"></td>
+        <td class="mono">${esc(it.upc)}</td>
+        <td>${esc(it.item_type || "")}</td>
+        <td>${esc(it.description || "")}</td>
+        <td class="text-end fw-bold">${have}</td>
+        <td class="text-end">
+          <input type="number" class="form-control form-control-sm" style="max-width: 120px; margin-left:auto;"
+                 min="0" max="${have}" value="0" data-role="qty">
+        </td>
+      `;
+      pickerBody.appendChild(tr);
+
+      const chk = tr.querySelector("input[data-role='check']");
+      const qty = tr.querySelector("input[data-role='qty']");
+      chk.addEventListener("change", () => {
+        if (chk.checked && parseInt(qty.value || "0", 10) === 0) qty.value = "1";
+        updatePickedTextarea();
+      });
+      qty.addEventListener("input", () => {
+        let v = parseInt(qty.value || "0", 10);
+        if (isNaN(v) || v < 0) v = 0;
+        if (v > have) v = have;
+        qty.value = String(v);
+        if (v > 0) chk.checked = true;
+        if (v === 0) chk.checked = false;
+        updatePickedTextarea();
+      });
+    }
+
+    pickerLoading.style.display = "none";
+    pickerEmpty.style.display = "none";
+    pickerTableWrap.style.display = "block";
+    updatePickedTextarea();
+  }
+
+  async function loadFromCase(){
+    const cc = fromCase.value;
+    pickerLoading.style.display = "block";
+    pickerTableWrap.style.display = "none";
+    pickerEmpty.style.display = "none";
+    pickerBody.innerHTML = "";
+    upcsPicked.value = "";
+    pickedSummary.innerHTML = `Selected: <strong class="text-white ms-1">0</strong> unit(s)`;
+
+    try{
+      const res = await fetch(`/api/case/${encodeURIComponent(cc)}/items`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error");
+      renderPicker(data.items);
+    }catch(e){
+      pickerLoading.style.display = "none";
+      pickerTableWrap.style.display = "none";
+      pickerEmpty.style.display = "block";
+      pickerEmpty.textContent = "Could not load items for this case.";
+    }
+  }
+
+  if (fromCase) {
+    fromCase.addEventListener("change", loadFromCase);
+    loadFromCase();
+  }
+
+  if (pickFilter) {
+    pickFilter.addEventListener("input", () => {
+      const q = pickFilter.value.toLowerCase().trim();
+      for (const row of pickerBody.querySelectorAll("tr")) {
+        const text = row.innerText.toLowerCase();
+        row.style.display = text.includes(q) ? "" : "none";
+      }
+    });
+  }
+
+  document.getElementById("moveForm").addEventListener("submit", () => {
+    updatePickedTextarea();
+  });
+</script>
+
+{% endblock %}

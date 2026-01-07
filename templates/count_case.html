@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="glass p-3 p-md-4" style="max-width: 980px;">
+  <div class="d-flex flex-wrap align-items-start justify-content-between gap-2">
+    <div>
+      <div class="fw-bold fs-4">Count — Case {{ case.case_code }}</div>
+      <div class="text-white-50">{{ case.case_name }}</div>
+      <div class="mt-2">
+        <span class="chip">Date: <strong class="text-white">{{ today }}</strong></span>
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-light" href="{{ url_for('counts') }}">Back to Counts</a>
+      <a class="btn btn-outline-light" href="{{ url_for('view_case', case_code=case.case_code) }}">Case Page</a>
+    </div>
+  </div>
+
+  <div class="divider my-3"></div>
+
+  <div class="glass-soft p-3 p-md-4 mb-3">
+    <div class="fw-bold fs-5 mb-2">System (live) totals</div>
+    <div class="d-flex flex-wrap gap-2">
+      <span class="chip">Bracelets: <strong class="text-white">{{ sys.bracelets }}</strong></span>
+      <span class="chip">Rings: <strong class="text-white">{{ sys.rings }}</strong></span>
+      <span class="chip">Earrings: <strong class="text-white">{{ sys.earrings }}</strong></span>
+      <span class="chip">Necklaces: <strong class="text-white">{{ sys.necklaces }}</strong></span>
+      <span class="chip">Total: <strong class="text-white">{{ sys.total }}</strong></span>
+      {% if sys.unknown and sys.unknown > 0 %}
+        <span class="chip">Unknown type: <strong class="text-white">{{ sys.unknown }}</strong></span>
+      {% endif %}
+    </div>
+
+    {% if last_count %}
+      <div class="text-white-50 small mt-3">
+        Latest physical count today: Total <span class="mono text-white">{{ last_count.total }}</span>
+        {% if last_count.username %} — {{ last_count.username }}{% endif %}
+        {% if last_count.total != sys.total %}
+          <span class="ms-2 chip">Δ <strong class="text-white">{{ last_count.total - sys.total }}</strong></span>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <form method="post" class="glass-soft p-3 p-md-4 d-grid gap-3">
+    <div class="fw-bold fs-5">Enter physical count</div>
+
+    <div class="row g-3">
+      <div class="col-6 col-md-3">
+        <label class="form-label text-white-50">Bracelets</label>
+        <input class="form-control" type="number" min="0" name="bracelets" id="bracelets" value="0" required>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label text-white-50">Rings</label>
+        <input class="form-control" type="number" min="0" name="rings" id="rings" value="0" required>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label text-white-50">Earrings</label>
+        <input class="form-control" type="number" min="0" name="earrings" id="earrings" value="0" required>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label text-white-50">Necklaces</label>
+        <input class="form-control" type="number" min="0" name="necklaces" id="necklaces" value="0" required>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label text-white-50">Other</label>
+        <input class="form-control" type="number" min="0" name="other" id="other" value="0" required>
+      </div>
+    </div>
+
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <div class="chip">Total: <strong class="text-white" id="totalOut">0</strong></div>
+      <div class="text-white-50 small">Total auto-calculates (Bracelets + Rings + Earrings + Necklaces).</div>
+    </div>
+
+    <div>
+      <label class="form-label text-white-50">Notes (optional)</label>
+      <input class="form-control" name="notes" placeholder="e.g., discrepancy notes / audit comments">
+    </div>
+
+    <div class="d-flex gap-2">
+      <button class="btn btn-success">Save Count</button>
+      <a class="btn btn-outline-light" href="{{ url_for('counts') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+  const ids = ["bracelets","rings","earrings","necklaces","other"];
+  function calc(){
+    let t = 0;
+    for (const id of ids) t += parseInt(document.getElementById(id).value || "0", 10);
+    document.getElementById("totalOut").textContent = String(t);
+  }
+  for (const id of ids) document.getElementById(id).addEventListener("input", calc);
+  calc();
+</script>
+
+{% endblock %}

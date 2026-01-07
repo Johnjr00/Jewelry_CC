@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h4 class="mb-1">Daily Activity Reports</h4>
+    <div class="text-white-50 small">Generate an Excel report per case for the selected day (matches the MASTER ACTIVITY LOG template).</div>
+  </div>
+  <a class="btn btn-outline-light" href="{{ url_for('index') }}">Home</a>
+</div>
+
+<div class="card shadow-sm border-0 mb-3" style="background: rgba(255,255,255,0.08);">
+  <div class="card-body">
+    <form method="get" action="{{ url_for('daily_activity_reports') }}" class="row g-2 align-items-end">
+      <div class="col-12 col-md-4">
+        <label class="form-label">Date (YYYY-MM-DD or MM/DD/YYYY)</label>
+        <input class="form-control" name="date" value="{{ date }}" placeholder="YYYY-MM-DD">
+      </div>
+      <div class="col-12 col-md-2">
+        <button class="btn btn-light w-100" type="submit">Update</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="row g-2">
+  {% for c in cases %}
+  <div class="col-6 col-md-3">
+    <a class="case-tile d-block text-decoration-none" href="{{ url_for('download_daily_activity_report', case_code=c.case_code, date=date) }}">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="fw-semibold">{{ c.case_code }}</div>
+          <div class="small text-white-50">{{ c.case_name }}</div>
+        </div>
+        <span class="badge rounded-pill bg-light text-dark">XLSX</span>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

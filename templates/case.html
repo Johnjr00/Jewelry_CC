@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="glass p-3 p-md-4">
+  <div class="d-flex flex-wrap align-items-start justify-content-between gap-2">
+    <div>
+      <div class="d-flex gap-2 align-items-center">
+        <div class="fw-bold fs-4">Case {{ case.case_code }}</div>
+        {% if case.is_virtual %}<span class="chip">Virtual</span>{% endif %}
+      </div>
+      <div class="text-white-50">{{ case.case_name }}</div>
+      <div class="d-flex gap-2 flex-wrap mt-2">
+        <span class="chip">UPCs: <strong class="text-white">{{ totals.distinct_upcs }}</strong></span>
+        <span class="chip">Units: <strong class="text-white">{{ totals.total_qty }}</strong></span>
+<span class="chip">Bracelets: <strong class="text-white">{{ type_totals.bracelets }}</strong></span>
+<span class="chip">Rings: <strong class="text-white">{{ type_totals.rings }}</strong></span>
+<span class="chip">Earrings: <strong class="text-white">{{ type_totals.earrings }}</strong></span>
+<span class="chip">Necklaces: <strong class="text-white">{{ type_totals.necklaces }}</strong></span>
+        <span class="chip">Other: <strong class="text-white">{{ type_totals.other }}</strong></span>
+        <a class="chip text-decoration-none" href="{{ url_for('export_case', case_code=case.case_code) }}">Export Case CSV</a>
+      </div>
+      {% if type_totals.unknown and type_totals.unknown > 0 %}
+        <div class="mt-2"><span class="chip">Unknown type: <strong class="text-white">{{ type_totals.unknown }}</strong></span></div>
+      {% endif %}
+      {% if last_count %}
+        <div class="mt-2 text-white-50 small">
+          Today\'s physical count ({{ last_count.local_date|mmddyyyy }}):
+          Bracelets <span class="mono">{{ last_count.bracelets }}</span>,
+          Rings <span class="mono">{{ last_count.rings }}</span>,
+          Earrings <span class="mono">{{ last_count.earrings }}</span>,
+          Necklaces <span class="mono">{{ last_count.necklaces }}</span>,
+          Other <span class="mono">{{ last_count.other }}</span>,
+          Total <span class="mono">{{ last_count.total }}</span>
+          {% if last_count.username %} — by {{ last_count.username }}{% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-light" href="{{ url_for('index') }}">Back to Case Grid</a>
+
+      {% if user.role == 'admin' %}
+        <a class="btn btn-outline-light" href="{{ url_for('edit_case', case_code=case.case_code) }}">Edit Case</a>
+      {% endif %}
+
+      {% if user.role == 'admin' and not case.is_virtual %}
+        <form method="post" action="{{ url_for('delete_case', case_code=case.case_code) }}">
+          <button class="btn btn-outline-danger" onclick="return confirm('Delete/Archive this case? Case must be empty.')">Delete Case</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="my-3"></div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-7">
+    <div class="glass-soft p-3 p-md-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div class="fw-bold fs-5">Current Items</div>
+        <input id="filterBox" class="form-control" style="max-width: 420px;"
+               placeholder="Filter by UPC, type, or description…">
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0" id="invTable">
+          <thead>
+            <tr>
+              <th style="width: 180px;">UPC</th>
+              <th style="width: 120px;">Type</th>
+              <th>Description</th>
+              <th class="text-end" style="width: 90px;">Qty</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for i in items %}
+            <tr>
+              <td class="mono">{{ i.upc }}</td>
+              <td>{{ i.item_type or "" }}</td>
+              <td>{{ i.description or "" }}</td>
+              <td class="text-end fw-bold">{{ i.qty }}</td>
+            </tr>
+            {% endfor %}
+            {% if items|length == 0 %}
+              <tr><td colspan="4" class="text-white-50">No inventory in this case.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="text-white-50 small mt-3">
+        Bulk scans accept one UPC per line, or <span class="mono">UPC,qty</span>. Duplicate scans automatically add quantity.
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-5">
+    <div class="sticky-actions d-grid gap-3">
+
+      <div class="glass p-3 p-md-4">
+        <div class="fw-bold fs-5 mb-2">Move (bulk)</div>
+        <div class="text-white-50 mb-3">Move items out of this case to another case.</div>
+
+        <form method="post" action="{{ url_for('move_out_of_case', case_code=case.case_code) }}" class="d-grid gap-2">
+          <label class="form-label text-white-50 mb-0">Destination Case</label>
+          <select class="form-select" name="to_case_code" required>
+            <option value="">Choose…</option>
+            {% for c in active_cases %}
+              {% if c.case_code != case.case_code %}
+                <option value="{{ c.case_code }}">
+                  {{ c.case_code }} — {{ c.case_name }}{% if c.is_virtual %} (Virtual){% endif %}
+                </option>
+              {% endif %}
+            {% endfor %}
+          </select>
+
+          <label class="form-label text-white-50 mb-0 mt-2">Description (optional)</label>
+          <input class="form-control" name="description" placeholder="Only fills blank product descriptions">
+
+          <label class="form-label text-white-50 mb-0 mt-2">UPCs to move</label>
+          <textarea class="form-control mono" name="upcs" rows="5" placeholder="Scan UPCs here…"></textarea>
+
+          <button class="btn btn-light">Move</button>
+        </form>
+      </div>
+
+      <div class="glass p-3 p-md-4">
+        <div class="fw-bold fs-5 mb-2">Sell (bulk)</div>
+        <div class="text-white-50 mb-3">Decrements quantity in this case and logs SOLD.</div>
+
+        <form method="post" action="{{ url_for('sell_from_case', case_code=case.case_code) }}" class="d-grid gap-2">
+  <div class="row g-2">
+    <div class="col-12 col-md-4">
+      <label class="form-label text-white-50 mb-0">Transaction / Register #</label>
+      <input class="form-control" name="trans_reg" required>
+    </div>
+    <div class="col-12 col-md-2">
+      <label class="form-label text-white-50 mb-0">Department #</label>
+      <input class="form-control" name="dept_no" required>
+    </div>
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50 mb-0">Brief Item Description</label>
+      <input class="form-control" name="brief_desc" maxlength="80" required>
+    </div>
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50 mb-0">Ticket Price</label>
+      <input class="form-control" name="ticket_price" inputmode="decimal" placeholder="199.99" required>
+    </div>
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50 mb-0">Diamond Test</label>
+      <select class="form-select" name="diamond_test" required>
+        <option value="" selected disabled>Choose…</option>
+        <option value="Y">Y</option>
+        <option value="N">N</option>
+        <option value="NRT">NRT</option>
+      </select>
+    </div>
+  </div>
+
+  <label class="form-label text-white-50 mb-0">UPCs sold</label>
+          <textarea class="form-control mono" name="upcs" rows="4" placeholder="Scan UPCs here…"></textarea>
+          <button class="btn btn-warning">Mark Sold</button>
+        </form>
+      </div>
+
+      <div class="glass p-3 p-md-4">
+        <div class="fw-bold fs-5 mb-2">Missing (bulk)</div>
+        <div class="text-white-50 mb-3">Decrements quantity in this case and logs MISSING.</div>
+
+        <form method="post" action="{{ url_for('missing_from_case', case_code=case.case_code) }}" class="d-grid gap-2">
+          <label class="form-label text-white-50 mb-0">UPCs missing</label>
+          <textarea class="form-control mono" name="upcs" rows="4" placeholder="Scan UPCs here…"></textarea>
+
+          <label class="form-label text-white-50 mb-0 mt-2">Notes (optional)</label>
+          <input class="form-control" name="notes" placeholder="e.g., Audit variance / could not locate">
+
+          <button class="btn btn-danger">Mark Missing</button>
+        </form>
+      </div>
+
+      <div class="glass-soft p-3 p-md-3 d-flex flex-wrap gap-2 justify-content-between align-items-center">
+        <a class="btn btn-outline-light" href="{{ url_for('history', case_code=case.case_code) }}">Full Case History</a>
+        <a class="btn btn-outline-light" href="{{ url_for('export_case', case_code=case.case_code) }}">Export CSV</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="my-4 divider"></div>
+
+<div class="glass-soft p-3 p-md-4">
+  <div class="fw-bold fs-5 mb-2">Recent Case History</div>
+  <div class="text-white-50 mb-3">Latest 150 actions involving this case.</div>
+
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Time (UTC)</th>
+          <th>User</th>
+          <th>Action</th>
+          <th>UPC</th>
+          <th>Type</th>
+          <th>Qty</th>
+          <th>From → To</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in history %}
+        <tr>
+          <td class="text-white-50 small">{{ h.ts|local_ts }}</td>
+          <td class="small">{{ h.username or "" }}</td>
+          <td><span class="chip">{{ h.action }}</span></td>
+          <td class="mono">{{ h.upc or "" }}</td>
+          <td class="small">{{ h.item_type or "" }}</td>
+          <td class="small">{{ h.qty or "" }}</td>
+          <td class="small">{{ h.from_case_code or "" }}{% if h.from_case_code or h.to_case_code %} → {% endif %}{{ h.to_case_code or "" }}</td>
+          <td class="small">{{ h.notes or "" }}</td>
+        </tr>
+        {% endfor %}
+        {% if history|length == 0 %}
+          <tr><td colspan="8" class="text-white-50">No history yet.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  const filterBox = document.getElementById("filterBox");
+  const table = document.getElementById("invTable");
+
+  if (filterBox && table) {
+    filterBox.addEventListener("input", () => {
+      const q = filterBox.value.toLowerCase().trim();
+      for (const row of table.tBodies[0].rows) {
+        const text = row.innerText.toLowerCase();
+        row.style.display = text.includes(q) ? "" : "none";
+      }
+    });
+  }
+</script>
+
+{% endblock %}

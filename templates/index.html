@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="glass p-3 p-md-4">
+  <div class="d-flex flex-wrap align-items-end justify-content-between gap-2">
+    <div>
+      <div class="text-white fw-bold fs-4">Case Picker</div>
+      <div class="text-white-50">Tap a case to open its inventory and actions.</div>
+    </div>
+
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-light" href="{{ url_for('export_history') }}">Export History CSV</a>
+    </div>
+  </div>
+</div>
+
+<div class="my-3"></div>
+
+<div class="row g-3">
+  {% for c in cases %}
+    <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+      <a class="case-tile" href="{{ url_for('view_case', case_code=c.case_code) }}">
+        <div class="d-flex justify-content-between align-items-start">
+          <div class="case-code">{{ c.case_code }}</div>
+          {% if c.is_virtual %}
+            <span class="chip">Virtual</span>
+          {% endif %}
+        </div>
+        <div class="case-name">{{ c.case_name }}</div>
+        <div class="case-meta">
+          <span>UPCs: <strong>{{ c.distinct_upcs }}</strong></span>
+          <span>Units: <strong>{{ c.total_qty }}</strong></span>
+        </div>
+      </a>
+    </div>
+  {% endfor %}
+</div>
+
+{% if user.role == 'admin' %}
+<div class="my-4 divider"></div>
+
+<div class="glass p-3 p-md-4">
+  <div class="fw-bold fs-5">Create New Case (Admin)</div>
+  <div class="text-white-50 mb-3">Use 01–30 style case numbers so the grid stays clean.</div>
+
+  <form method="post" action="{{ url_for('create_case') }}" class="row g-2">
+    <div class="col-12 col-md-3">
+      <label class="form-label text-white-50">Case Number</label>
+      <input class="form-control" name="case_code" placeholder="e.g. 07" required>
+    </div>
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50">Case Name</label>
+      <input class="form-control" name="case_name" placeholder="e.g. Gold Earrings" required>
+    </div>
+    <div class="col-12 col-md-3 d-flex align-items-end">
+      <button class="btn btn-success w-100">Create</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="my-4 divider"></div>
+
+<div class="glass-soft p-3 p-md-4">
+  <div class="fw-bold fs-5">Recent Activity</div>
+  <div class="text-white-50 mb-3">Last 25 actions</div>
+
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Time (UTC)</th>
+          <th>User</th>
+          <th>Action</th>
+          <th>UPC</th>
+          <th>Type</th>
+          <th>Qty</th>
+          <th>From → To</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recent %}
+        <tr>
+          <td class="text-white-50 small">{{ r.ts|local_ts }}</td>
+          <td class="small">{{ r.username or "" }}</td>
+          <td><span class="chip">{{ r.action }}</span></td>
+          <td class="mono">{{ r.upc or "" }}</td>
+          <td class="small">{{ r.item_type or "" }}</td>
+          <td class="small">{{ r.qty or "" }}</td>
+          <td class="small">{{ r.from_case_code or "" }}{% if r.from_case_code or r.to_case_code %} → {% endif %}{{ r.to_case_code or "" }}</td>
+        </tr>
+        {% endfor %}
+        {% if recent|length == 0 %}
+          <tr><td colspan="7" class="text-white-50">No history yet.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

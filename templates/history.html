@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="glass p-3 p-md-4">
+  <div class="fw-bold fs-4">History</div>
+  <div class="text-white-50 mb-3">Filter and export the latest events.</div>
+
+    <form method="get" class="row g-2 mb-3">
+    <div class="col-12 col-md-3">
+      <label class="form-label text-white-50">Report</label>
+      <select class="form-select" name="report" onchange="this.form.submit()">
+        <option value="events" {% if report_type != 'counts' %}selected{% endif %}>Inventory Events</option>
+        <option value="counts" {% if report_type == 'counts' %}selected{% endif %}>Daily Counts</option>
+      </select>
+    </div>
+
+    <div class="col-12 col-md-3">
+      <label class="form-label text-white-50">Filter by Case</label>
+      <select class="form-select" name="case_code">
+        <option value="">All</option>
+        {% for c in active_cases %}
+          <option value="{{ c.case_code }}" {% if case_code==c.case_code %}selected{% endif %}>
+            {{ c.case_code }} — {{ c.case_name }}{% if c.is_virtual %} (Virtual){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    {% if report_type == 'counts' %}
+      <div class="col-12 col-md-3">
+        <label class="form-label text-white-50">Date (store-local)</label>
+        <input class="form-control" name="date" value="{{ date }}" placeholder="YYYY-MM-DD">
+      </div>
+      <div class="col-12 col-md-3 d-flex align-items-end gap-2">
+        <button class="btn btn-outline-light">Apply</button>
+        <a class="btn btn-outline-light" href="{{ url_for('history', report='counts') }}">Clear</a>
+        <a class="btn btn-outline-light" href="{{ url_for('export_history', report='counts', case_code=case_code, date=date) }}">Export CSV</a>
+      </div>
+    {% else %}
+      <div class="col-12 col-md-3">
+        <label class="form-label text-white-50">Filter by UPC</label>
+        <input class="form-control mono" name="upc" value="{{ upc }}" placeholder="Optional">
+      </div>
+
+      <div class="col-12 col-md-3">
+        <label class="form-label text-white-50">Filter by Action</label>
+        <input class="form-control" name="action" value="{{ action }}" placeholder="e.g. MOVE, SOLD, MISSING">
+      </div>
+
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-outline-light">Apply</button>
+        <a class="btn btn-outline-light" href="{{ url_for('history') }}">Clear</a>
+        <a class="btn btn-outline-light" href="{{ url_for('export_history', report='events', case_code=case_code, upc=upc, action=action) }}">Export CSV</a>
+      </div>
+    {% endif %}
+  </form>
+
+    <div class="table-responsive">
+    {% if report_type == 'counts' %}
+      <table class="table table-sm table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>Date</th>
+            <th>Case</th>
+            <th>User</th>
+            <th class="text-end">Bracelets</th>
+            <th class="text-end">Rings</th>
+            <th class="text-end">Earrings</th>
+            <th class="text-end">Necklaces</th>
+            <th class="text-end">Other</th>
+            <th class="text-end">Total</th>
+            <th class="text-end">Variance</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="text-white-50 small">{{ r.ts_utc|local_ts }}</td>
+            <td class="small">{{ r.local_date|mmddyyyy }}</td>
+            <td class="small"><a class="link-light" href="{{ url_for('view_case', case_code=r.case_code) }}">{{ r.case_code }}</a></td>
+            <td class="small">{{ r.username or "" }}</td>
+            <td class="text-end small">{{ r.bracelets }}</td>
+            <td class="text-end small">{{ r.rings }}</td>
+            <td class="text-end small">{{ r.earrings }}</td>
+            <td class="text-end small">{{ r.necklaces }}</td>
+             <td class="text-end small">{{ r.other }}</td>
+            <td class="text-end fw-bold">{{ r.total }}</td>
+             <td class="text-end fw-bold">{{ r.total - (sys_totals_counts.get(r.case_code, {}).get("total", 0)) }}</td>
+            <td class="small">{{ r.notes or "" }}</td>
+          </tr>
+          {% endfor %}
+          {% if rows|length == 0 %}
+            <tr><td colspan="12" class="text-white-50">No results.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    {% else %}
+      <table class="table table-sm table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>User</th>
+            <th>Action</th>
+            <th>UPC</th>
+            <th>Type</th>
+            <th>Qty</th>
+            <th>From → To</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in rows %}
+          <tr>
+            <td class="text-white-50 small">{{ h.ts|local_ts }}</td>
+            <td class="small">{{ h.username or "" }}</td>
+            <td><span class="chip">{{ h.action }}</span></td>
+            <td class="mono">{{ h.upc or "" }}</td>
+            <td class="small">{{ h.item_type or "" }}</td>
+            <td class="small">{{ h.qty or "" }}</td>
+            <td class="small">{{ h.from_case_code or "" }}{% if h.from_case_code or h.to_case_code %} → {% endif %}{{ h.to_case_code or "" }}</td>
+            <td class="small">{{ h.notes or "" }}</td>
+          </tr>
+          {% endfor %}
+          {% if rows|length == 0 %}
+            <tr><td colspan="8" class="text-white-50">No results.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

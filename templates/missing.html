@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="glass p-3 p-md-4" style="max-width: 980px;">
+  <div class="fw-bold fs-4">Missing Item</div>
+  <div class="text-white-50 mb-3">Remove quantity from a selected case and log MISSING.</div>
+
+  <form method="post" class="row g-3">
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50">Case</label>
+      <select class="form-select" name="case_code" required>
+        <option value="">Choose…</option>
+        {% for c in active_cases %}
+          <option value="{{ c.case_code }}">{{ c.case_code }} — {{ c.case_name }}{% if c.is_virtual %} (Virtual){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-8 col-md-4">
+      <label class="form-label text-white-50">UPC</label>
+      <input class="form-control mono" name="upc" data-autofocus="true" required>
+    </div>
+
+    <div class="col-4 col-md-2">
+      <label class="form-label text-white-50">Qty</label>
+      <input class="form-control" type="number" min="1" name="qty" value="1" required>
+    </div>
+
+    <div class="col-12">
+      <label class="form-label text-white-50">Notes (optional)</label>
+      <input class="form-control" name="notes" placeholder="e.g., could not locate during audit">
+    </div>
+
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-danger">Mark Missing</button>
+      <a class="btn btn-outline-light" href="{{ url_for('index') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

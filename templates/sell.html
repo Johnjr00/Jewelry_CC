@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="glass p-3 p-md-4" style="max-width: 980px;">
+  <div class="fw-bold fs-4">Sell Item</div>
+  <div class="text-white-50 mb-3">Remove quantity from a selected case and log SOLD.</div>
+
+  <form method="post" class="row g-3">
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50">Case</label>
+      <select class="form-select" name="case_code" required>
+        <option value="">Choose…</option>
+        {% for c in active_cases %}
+          <option value="{{ c.case_code }}">{{ c.case_code }} — {{ c.case_name }}{% if c.is_virtual %} (Virtual){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-8 col-md-4">
+      <label class="form-label text-white-50">UPC</label>
+      <input class="form-control mono" name="upc" data-autofocus="true" required>
+    </div>
+
+    <div class="col-4 col-md-2">
+      <label class="form-label text-white-50">Qty</label>
+      <input class="form-control" type="number" min="1" name="qty" value="1" required>
+    </div>
+
+    
+<div class="col-12"><hr class="border-light opacity-25"></div>
+
+<div class="col-12">
+  <div class="fw-bold mb-1">Sale Details</div>
+  <div class="text-white-50 small">Required for SOLD entries (flows into the Daily Activity Log).</div>
+</div>
+
+<div class="col-12 col-md-4">
+  <label class="form-label text-white-50">Transaction / Register #</label>
+  <input class="form-control" name="trans_reg" required>
+</div>
+
+<div class="col-12 col-md-2">
+  <label class="form-label text-white-50">Department #</label>
+  <input class="form-control" name="dept_no" required>
+</div>
+
+<div class="col-12 col-md-6">
+  <label class="form-label text-white-50">Brief Item Description</label>
+  <input class="form-control" name="brief_desc" maxlength="80" required>
+</div>
+
+<div class="col-12 col-md-3">
+  <label class="form-label text-white-50">Ticket Price</label>
+  <input class="form-control" name="ticket_price" inputmode="decimal" placeholder="199.99" required>
+</div>
+
+<div class="col-12 col-md-3">
+  <label class="form-label text-white-50">Diamond Test</label>
+  <select class="form-select" name="diamond_test" required>
+    <option value="" selected disabled>Choose…</option>
+    <option value="Y">Y</option>
+    <option value="N">N</option>
+    <option value="NRT">NRT</option>
+  </select>
+</div>
+
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-warning">Mark Sold</button>
+      <a class="btn btn-outline-light" href="{{ url_for('index') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% endblock %}
