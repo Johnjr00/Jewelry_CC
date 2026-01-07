@@ -46,8 +46,59 @@ ACTION_CASE_EDIT = "CASE_EDIT"
 ACTION_USER_CREATE = "USER_CREATE"
 ACTION_USER_DISABLE = "USER_DISABLE"
 
-ITEM_TYPES_ORDER = ["Earring", "Ring", "Necklace", "Bracelet", "Other"]
+ITEM_CATEGORIES = [
+    {
+        "name": "Earring",
+        "count_key": "earrings",
+        "plural": "Earrings",
+        "short": "E",
+        "receive_order": 1,
+        "count_order": 3,
+    },
+    {
+        "name": "Ring",
+        "count_key": "rings",
+        "plural": "Rings",
+        "short": "R",
+        "receive_order": 2,
+        "count_order": 2,
+    },
+    {
+        "name": "Necklace",
+        "count_key": "necklaces",
+        "plural": "Necklaces",
+        "short": "N",
+        "receive_order": 3,
+        "count_order": 4,
+    },
+    {
+        "name": "Bracelet",
+        "count_key": "bracelets",
+        "plural": "Bracelets",
+        "short": "B",
+        "receive_order": 4,
+        "count_order": 1,
+    },
+    {
+        "name": "Other",
+        "count_key": "other",
+        "plural": "Other",
+        "short": "O",
+        "receive_order": 5,
+        "count_order": 5,
+    },
+]
+
+
+def _sorted_item_categories(key: str):
+    return sorted(ITEM_CATEGORIES, key=lambda c: c[key])
+
+
+ITEM_TYPES_ORDER = [c["name"] for c in _sorted_item_categories("receive_order")]
 ALLOWED_ITEM_TYPES = set(ITEM_TYPES_ORDER)
+COUNT_CATEGORIES = _sorted_item_categories("count_order")
+COUNT_FIELDS = [c["count_key"] for c in COUNT_CATEGORIES]
+DIAMOND_TEST_OPTIONS = {"Y", "N", "NRT"}
 
 app = Flask(__name__)
 app.secret_key = "change-this-in-production"
@@ -460,7 +511,6 @@ def build_daily_activity_workbook(case_code: str, local_date: str):
 
         # ACTION
         action = (e["action"] or "").upper()
-        ws.cell(row, 1).value = action
 
         # DOCUMENT # / TRANS/REG (use SYS-id)
         doc = (e["trans_reg"] or "").strip() if action == "SOLD" else ""
@@ -527,12 +577,11 @@ def build_daily_activity_workbook(case_code: str, local_date: str):
             if e["from_case_code"] == case_code:
                 qty_out = qty
 
-        ws.cell(row, 11).value = qty
-        ws.cell(row, 12).value = qty_in if qty_in else None
-        ws.cell(row, 13).value = qty_out if qty_out else None
+        ws.cell(row, 11).value = qty_in if qty_in else None
+        ws.cell(row, 12).value = qty_out if qty_out else None
 
-        # INITIALS (optional) — put in column O so we don't collide with the template
-        ws.cell(row, 15).value = _initials_from_username(e["username"] or "")
+        # INITIALS (optional)
+        ws.cell(row, 13).value = _initials_from_username(e["username"] or "")
 
         row += 1
 
@@ -583,6 +632,7 @@ def counts():
         counts_map=counts_map,
         sys_totals=sys_totals,
         today=today,
+        count_categories=COUNT_CATEGORIES,
         user=current_user(),
         new_receipts_code=NEW_RECEIPTS_CODE,
     )
@@ -623,29 +673,25 @@ def count_case(case_code: str):
             except ValueError:
                 return -1
 
-        bracelets = to_int("bracelets")
-        rings = to_int("rings")
-        earrings = to_int("earrings")
-        necklaces = to_int("necklaces")
-        other = to_int("other")
+        counts = {field: to_int(field) for field in COUNT_FIELDS}
         notes = (request.form.get("notes") or "").strip() or None
 
-        if min(bracelets, rings, earrings, necklaces) < 0:
+        if any(value < 0 for value in counts.values()):
             flash("Counts must be whole numbers (0 or higher).", "danger")
             return redirect(url_for("count_case", case_code=case_code))
 
-        total = bracelets + rings + earrings + necklaces + other
+        total = sum(counts.values())
         u = current_user()
 
         db.execute(
             """
             INSERT INTO case_counts
-              (ts_utc, local_date, case_code, user_id, username, bracelets, rings, earrings, necklaces, total, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+              (ts_utc, local_date, case_code, user_id, username, bracelets, rings, earrings, necklaces, other, total, notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (utc_now(), today, case_code,
              u.id if u else None, u.username if u else None,
-             bracelets, rings, earrings, necklaces, total, notes),
+             counts["bracelets"], counts["rings"], counts["earrings"], counts["necklaces"], counts["other"], total, notes),
         )
         db.commit()
 
@@ -658,6 +704,7 @@ def count_case(case_code: str):
         today=today,
         sys=sys,
         last_count=last_count,
+        count_categories=COUNT_CATEGORIES,
         user=current_user(),
     )
 
@@ -835,23 +882,27 @@ def _validate_have_qty(case_code: str, upc_map: Dict[str, int]) -> list[str]:
 def case_type_totals(case_code: str) -> dict:
     """Compute live totals for a case, grouped by item_type."""
     db = get_db()
-    row = db.execute(
-        """
+    pieces = []
+    params = []
+    for category in ITEM_CATEGORIES:
+        pieces.append(
+            f"COALESCE(SUM(CASE WHEN p.item_type=? THEN inv.qty ELSE 0 END),0) AS {category['count_key']}"
+        )
+        params.append(category["name"])
+    pieces.append("COALESCE(SUM(inv.qty),0) AS total")
+    pieces.append("COALESCE(SUM(CASE WHEN p.item_type IS NULL OR p.item_type='' THEN inv.qty ELSE 0 END),0) AS unknown")
+    sql = f"""
         SELECT
-          COALESCE(SUM(CASE WHEN p.item_type='Bracelet' THEN inv.qty ELSE 0 END),0) AS bracelets,
-          COALESCE(SUM(CASE WHEN p.item_type='Ring' THEN inv.qty ELSE 0 END),0) AS rings,
-          COALESCE(SUM(CASE WHEN p.item_type='Earring' THEN inv.qty ELSE 0 END),0) AS earrings,
-          COALESCE(SUM(CASE WHEN p.item_type='Necklace' THEN inv.qty ELSE 0 END),0) AS necklaces,
-          COALESCE(SUM(CASE WHEN p.item_type='Other' THEN inv.qty ELSE 0 END),0) AS other,
-          COALESCE(SUM(inv.qty),0) AS total,
-          COALESCE(SUM(CASE WHEN p.item_type IS NULL OR p.item_type='' THEN inv.qty ELSE 0 END),0) AS unknown
+          {", ".join(pieces)}
         FROM inventory inv
         LEFT JOIN products p ON p.upc = inv.upc
         WHERE inv.case_code = ?
-        """,
-        (case_code,),
-    ).fetchone()
-    return dict(row) if row else {"bracelets":0,"rings":0,"earrings":0,"necklaces":0,"other":0,"total":0,"unknown":0}
+        """
+    params.append(case_code)
+    row = db.execute(sql, params).fetchone()
+    base = {c["count_key"]: 0 for c in ITEM_CATEGORIES}
+    base.update({"total": 0, "unknown": 0})
+    return dict(row) if row else base
 
 
 
@@ -1050,6 +1101,7 @@ def view_case(case_code: str):
         last_count=last_count,
         history=history_rows,
         active_cases=active_cases,
+        count_categories=COUNT_CATEGORIES,
         user=current_user(),
         new_receipts_code=NEW_RECEIPTS_CODE,
     )
@@ -1195,17 +1247,35 @@ def move_out_of_case(case_code: str):
     return redirect(url_for("view_case", case_code=to_case))
 
 
+def parse_sold_fields(form: dict) -> Tuple[Optional[dict], Optional[str]]:
+    trans_reg = (form.get("trans_reg") or "").strip()
+    dept_no = (form.get("dept_no") or "").strip()
+    brief_desc = (form.get("brief_desc") or "").strip()
+    ticket_price_raw = (form.get("ticket_price") or "").strip()
+    diamond_test = (form.get("diamond_test") or "").strip().upper()
+
+    if (not trans_reg) or (not dept_no) or (not brief_desc) or (not ticket_price_raw) or (diamond_test not in DIAMOND_TEST_OPTIONS):
+        return None, "For SOLD you must enter Transaction/Register #, Department #, Brief Description, Ticket Price, and Diamond Test (Y/N/NRT)."
+
+    try:
+        ticket_price = float(ticket_price_raw.replace("$", "").replace(",", ""))
+    except Exception:
+        return None, "Ticket Price must be a valid number (example: 199.99)."
+
+    return {
+        "trans_reg": trans_reg,
+        "dept_no": dept_no,
+        "brief_desc": brief_desc,
+        "ticket_price": ticket_price,
+        "diamond_test": diamond_test,
+    }, None
+
+
 @app.post("/cases/<case_code>/sell_out")
 @login_required
 def sell_from_case(case_code: str):
     case_code = (case_code or "").strip()
     upc_map = parse_upc_lines(request.form.get("upcs", ""))
-
-    trans_reg = (request.form.get("trans_reg") or "").strip()
-    dept_no = (request.form.get("dept_no") or "").strip()
-    brief_desc = (request.form.get("brief_desc") or "").strip()
-    ticket_price_raw = (request.form.get("ticket_price") or "").strip()
-    diamond_test = (request.form.get("diamond_test") or "").strip().upper()
 
     if not ensure_case_exists(case_code):
         flash("Case not found.", "danger")
@@ -1214,15 +1284,9 @@ def sell_from_case(case_code: str):
         flash("Scan/enter at least one UPC to sell.", "danger")
         return redirect(url_for("view_case", case_code=case_code))
 
-    # Validate required SOLD fields (applies to this submission)
-    if (not trans_reg) or (not dept_no) or (not brief_desc) or (not ticket_price_raw) or (diamond_test not in ("Y", "N", "NRT")):
-        flash("For SOLD you must enter Transaction/Register #, Department #, Brief Description, Ticket Price, and Diamond Test (Y/N/NRT).", "danger")
-        return redirect(url_for("view_case", case_code=case_code))
-
-    try:
-        ticket_price = float(ticket_price_raw.replace("$", "").replace(",", ""))
-    except Exception:
-        flash("Ticket Price must be a valid number (example: 199.99).", "danger")
+    sold_fields, error = parse_sold_fields(request.form)
+    if error:
+        flash(error, "danger")
         return redirect(url_for("view_case", case_code=case_code))
 
     problems = _validate_have_qty(case_code, upc_map)
@@ -1240,48 +1304,11 @@ def sell_from_case(case_code: str):
                 qty=qty,
                 from_case_code=case_code,
                 notes="Sold from case workbench",
-                trans_reg=trans_reg,
-                dept_no=dept_no,
-                brief_desc=brief_desc,
-                ticket_price=ticket_price,
-                diamond_test=diamond_test,
-            )
-    db.commit()
-
-    flash(f"Sold {sum(upc_map.values())} unit(s) from case {case_code}.", "success")
-    return redirect(url_for("view_case", case_code=case_code))
-
-    # Validate required SOLD fields (applies to this submission)
-    if (not trans_reg) or (not dept_no) or (not brief_desc) or (not ticket_price_raw) or (diamond_test not in ("Y", "N", "NRT")):
-        flash("For SOLD you must enter Transaction/Register #, Department #, Brief Description, Ticket Price, and Diamond Test (Y/N/NRT).", "danger")
-        return redirect(url_for("view_case", case_code=case_code))
-
-    try:
-        ticket_price = float(ticket_price_raw.replace("$", "").replace(",", ""))
-    except Exception:
-        flash("Ticket Price must be a valid number (example: 199.99).", "danger")
-        return redirect(url_for("view_case", case_code=case_code))
-
-    problems = _validate_have_qty(case_code, upc_map)
-    if problems:
-        flash("Not enough qty to sell for: " + "; ".join(problems), "danger")
-        return redirect(url_for("view_case", case_code=case_code))
-
-    db = get_db()
-    for upc, qty in upc_map.items():
-        ok, _ = remove_qty(case_code, upc, qty)
-        if ok:
-            log_history(
-                ACTION_SOLD,
-                upc=upc,
-                qty=qty,
-                from_case_code=case_code,
-                notes="Sold from case workbench",
-                trans_reg=trans_reg,
-                dept_no=dept_no,
-                brief_desc=brief_desc,
-                ticket_price=ticket_price,
-                diamond_test=diamond_test,
+                trans_reg=sold_fields["trans_reg"],
+                dept_no=sold_fields["dept_no"],
+                brief_desc=sold_fields["brief_desc"],
+                ticket_price=sold_fields["ticket_price"],
+                diamond_test=sold_fields["diamond_test"],
             )
     db.commit()
 
@@ -1329,7 +1356,7 @@ def receive():
         upc_map = parse_upc_lines(request.form.get("upcs", ""))
 
         if item_type not in ALLOWED_ITEM_TYPES:
-            flash("Select an item type (Earring, Ring, Necklace, Bracelet).", "danger")
+            flash(f"Select an item type ({', '.join(ITEM_TYPES_ORDER)}).", "danger")
             return redirect(url_for("receive"))
 
         if not upc_map:
@@ -1419,12 +1446,6 @@ def sell():
         qty = int(request.form.get("qty") or "1")
         case_code = (request.form.get("case_code") or "").strip() or None
 
-        trans_reg = (request.form.get("trans_reg") or "").strip()
-        dept_no = (request.form.get("dept_no") or "").strip()
-        brief_desc = (request.form.get("brief_desc") or "").strip()
-        ticket_price_raw = (request.form.get("ticket_price") or "").strip()
-        diamond_test = (request.form.get("diamond_test") or "").strip().upper()
-
         if not upc or qty <= 0:
             flash("UPC required and qty must be > 0.", "danger")
             return redirect(url_for("sell"))
@@ -1432,15 +1453,9 @@ def sell():
             flash("Please choose a valid case.", "danger")
             return redirect(url_for("sell"))
 
-        # Validate required SOLD fields
-        if (not trans_reg) or (not dept_no) or (not brief_desc) or (not ticket_price_raw) or (diamond_test not in ("Y", "N", "NRT")):
-            flash("For SOLD you must enter Transaction/Register #, Department #, Brief Description, Ticket Price, and Diamond Test (Y/N/NRT).", "danger")
-            return redirect(url_for("sell"))
-
-        try:
-            ticket_price = float(ticket_price_raw.replace("$", "").replace(",", ""))
-        except Exception:
-            flash("Ticket Price must be a valid number (example: 199.99).", "danger")
+        sold_fields, error = parse_sold_fields(request.form)
+        if error:
+            flash(error, "danger")
             return redirect(url_for("sell"))
 
         ok, have = remove_qty(case_code, upc, qty)
@@ -1455,11 +1470,11 @@ def sell():
             qty=qty,
             from_case_code=case_code,
             notes="Sold (standalone)",
-            trans_reg=trans_reg,
-            dept_no=dept_no,
-            brief_desc=brief_desc,
-            ticket_price=ticket_price,
-            diamond_test=diamond_test,
+            trans_reg=sold_fields["trans_reg"],
+            dept_no=sold_fields["dept_no"],
+            brief_desc=sold_fields["brief_desc"],
+            ticket_price=sold_fields["ticket_price"],
+            diamond_test=sold_fields["diamond_test"],
         )
         flash(f"Sold {qty} unit(s) of {upc} from case {case_code}.", "success")
         return redirect(url_for("view_case", case_code=case_code))
@@ -1548,6 +1563,7 @@ def history():
             upc=upc,
             action=action,
             date=date,
+            count_categories=COUNT_CATEGORIES,
             user=current_user(),
         )
 
@@ -1575,6 +1591,7 @@ def history():
         upc=upc,
         action=action,
         date=date,
+        count_categories=COUNT_CATEGORIES,
         user=current_user(),
     )
 
@@ -1679,16 +1696,16 @@ def export_history():
         if date:
             sql += " AND local_date=?"
             params.append(date)
-        sql += " ORDER BY h.id DESC LIMIT 5000"
+        sql += " ORDER BY id DESC LIMIT 5000"
         rows = db.execute(sql, params).fetchall()
 
         output = io.StringIO()
         w = csv.writer(output)
-        w.writerow(["ts_utc","local_date","case_code","username","bracelets","rings","earrings","necklaces","total","notes"])
+        w.writerow(["ts_utc","local_date","case_code","username","bracelets","rings","earrings","necklaces","other","total","notes"])
         for r in rows:
             w.writerow([
                 r["ts_utc"], r["local_date"], r["case_code"], r["username"] or "",
-                r["bracelets"], r["rings"], r["earrings"], r["necklaces"], r["total"],
+                r["bracelets"], r["rings"], r["earrings"], r["necklaces"], r["other"], r["total"],
                 r["notes"] or ""
             ])
         return Response(

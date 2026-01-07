@@ -64,11 +64,9 @@
             <th>Date</th>
             <th>Case</th>
             <th>User</th>
-            <th class="text-end">Bracelets</th>
-            <th class="text-end">Rings</th>
-            <th class="text-end">Earrings</th>
-            <th class="text-end">Necklaces</th>
-            <th class="text-end">Other</th>
+            {% for cat in count_categories %}
+              <th class="text-end">{{ cat.plural }}</th>
+            {% endfor %}
             <th class="text-end">Total</th>
             <th class="text-end">Variance</th>
             <th>Notes</th>
@@ -81,11 +79,9 @@
             <td class="small">{{ r.local_date|mmddyyyy }}</td>
             <td class="small"><a class="link-light" href="{{ url_for('view_case', case_code=r.case_code) }}">{{ r.case_code }}</a></td>
             <td class="small">{{ r.username or "" }}</td>
-            <td class="text-end small">{{ r.bracelets }}</td>
-            <td class="text-end small">{{ r.rings }}</td>
-            <td class="text-end small">{{ r.earrings }}</td>
-            <td class="text-end small">{{ r.necklaces }}</td>
-             <td class="text-end small">{{ r.other }}</td>
+            {% for cat in count_categories %}
+              <td class="text-end small">{{ r[cat.count_key] }}</td>
+            {% endfor %}
             <td class="text-end fw-bold">{{ r.total }}</td>
              <td class="text-end fw-bold">{{ r.total - (sys_totals_counts.get(r.case_code, {}).get("total", 0)) }}</td>
             <td class="small">{{ r.notes or "" }}</td>
