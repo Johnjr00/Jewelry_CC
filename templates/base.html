@@ -17,7 +17,7 @@
       --panel2: rgba(255,255,255,.06);
       --stroke: rgba(255,255,255,.12);
       --text: rgba(255,255,255,.92);
-      --muted: rgba(255,255,255,.62);
+      --muted: rgba(255,255,255,.78);
       --radius: 18px;
     }
 
@@ -47,6 +47,16 @@
     .btn, .form-control, .form-select, .alert { border-radius: 16px; }
     .form-control, .form-select, textarea{ background: rgba(255,255,255,.92); color:#111; border-color: rgba(0,0,0,.08);} 
     .form-control::placeholder{ color: rgba(0,0,0,.45); }
+    .form-control:focus, .form-select:focus, textarea:focus{
+      background: rgba(255,255,255,.98);
+      color: #111;
+    }
+    .form-control:disabled, .form-select:disabled, textarea:disabled,
+    .form-control[readonly], textarea[readonly]{
+      background: rgba(255,255,255,.85);
+      color: #111;
+      opacity: 1;
+    }
     .form-control, .form-select { padding: .9rem .95rem; }
     .btn { padding: .8rem 1rem; font-weight: 600; }
 
@@ -118,7 +128,7 @@
     }
 
     /* Bootstrap's text-white-50 can get too faint on tablets; bump it slightly */
-    .text-white-50{ color: rgba(255,255,255,.72) !important; }
+    .text-white-50{ color: rgba(255,255,255,.78) !important; }
 
     /* Links: keep them readable on the dark red background */
     a{ color: rgba(255,255,255,.90); }
