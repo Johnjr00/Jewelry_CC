@@ -12,7 +12,24 @@
     body{ font-family: Inter, system-ui; background: radial-gradient(1200px 800px at 20% 0%, #7f1d1d 0%, #1a0b0b 55%, #070308 100%); color: rgba(255,255,255,.92); }
     .glass{ background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); border-radius: 18px; backdrop-filter: blur(10px); }
     .btn, .form-control{ border-radius: 16px; }
-    .form-control{ padding: .9rem .95rem; }
+    .form-control{
+      padding: .9rem .95rem;
+      background: rgba(255,255,255,.92);
+      color: #111;
+      border-color: rgba(0,0,0,.08);
+    }
+    .form-control::placeholder{ color: rgba(0,0,0,.45); }
+    .form-control:focus{
+      background: rgba(255,255,255,.98);
+      color: #111;
+    }
+    .form-control:disabled,
+    .form-control[readonly]{
+      background: rgba(255,255,255,.85);
+      color: #111;
+      opacity: 1;
+    }
+    .text-white-50{ color: rgba(255,255,255,.78) !important; }
   </style>
 </head>
 <body>
