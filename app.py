@@ -452,6 +452,47 @@ def _local_date_str_from_ts(ts: str) -> str:
         return ""
     return dt.date().isoformat()
 
+def _daily_activity_totals(case_code: str, local_date: str) -> tuple[int, int, int]:
+    db = get_db()
+    events = db.execute(
+        """
+        SELECT h.ts, h.action, h.qty, h.from_case_code, h.to_case_code
+        FROM history h
+        WHERE h.action IN ('RECEIVE','MOVE','SOLD','MISSING')
+          AND (h.from_case_code = ? OR h.to_case_code = ?)
+        ORDER BY h.ts ASC, h.id ASC
+        """,
+        (case_code, case_code),
+    ).fetchall()
+
+    total_in = 0
+    total_out = 0
+    for e in events:
+        ld = _local_date_str_from_ts(e["ts"])
+        if ld != local_date:
+            continue
+        action = (e["action"] or "").upper()
+        qty = int(e["qty"] or 0)
+        qty_in = 0
+        qty_out = 0
+        if action == "RECEIVE":
+            if e["to_case_code"] == case_code:
+                qty_in = qty
+            else:
+                qty_out = qty
+        elif action == "MOVE":
+            if e["to_case_code"] == case_code:
+                qty_in = qty
+            elif e["from_case_code"] == case_code:
+                qty_out = qty
+        else:
+            if e["from_case_code"] == case_code:
+                qty_out = qty
+        total_in += qty_in
+        total_out += qty_out
+
+    return total_in, total_out, total_in - total_out
+
 def build_daily_activity_workbook(case_code: str, local_date: str):
     """Return an openpyxl workbook for the given case and local_date (YYYY-MM-DD) using MASTER ACTIVITY LOG template."""
     # Load template (relative to project root). Users should keep MASTER ACTIVITY LOG.xlsx next to app folder.
@@ -622,9 +663,19 @@ def build_daily_count_workbook(case_code: str, local_date: str):
 
     ws[f"A{start_row}"].value = f"{day_name} - TODAY'S DATE:   {date_display}"
     ws[f"Q{start_row}"].value = f"CASE # {case_code}"
-    ws[f"F{start_row + 3}"].value = date_display
 
     db = get_db()
+    previous_count = db.execute(
+        """
+        SELECT *
+        FROM case_counts
+        WHERE case_code=? AND local_date < ?
+        ORDER BY local_date DESC, id DESC
+        LIMIT 1
+        """,
+        (case_code, local_date),
+    ).fetchone()
+
     count = db.execute(
         """
         SELECT *
@@ -635,6 +686,18 @@ def build_daily_count_workbook(case_code: str, local_date: str):
         """,
         (case_code, local_date),
     ).fetchone()
+
+    if previous_count:
+        ws.cell(start_row + 3, 6).value = fmt_mmddyyyy(previous_count["local_date"])
+        ws.cell(start_row + 5, 6).value = int(previous_count["total"])
+        previous_initials = _initials_from_username(previous_count["username"] or "")
+        if previous_initials:
+            ws.cell(start_row + 7, 6).value = previous_initials
+
+    total_in, total_out, net = _daily_activity_totals(case_code, local_date)
+    ws.cell(start_row + 3, 13).value = total_in
+    ws.cell(start_row + 3, 14).value = total_out
+    ws.cell(start_row + 3, 15).value = net
 
     if count:
         row_map = {
@@ -650,11 +713,11 @@ def build_daily_count_workbook(case_code: str, local_date: str):
             ws.cell(row, 12).value = value
 
         total = int(count["total"])
-        ws.cell(start_row + 5, 6).value = total
+        ws.cell(start_row + 8, 12).value = total
 
         initials = _initials_from_username(count["username"] or "")
         if initials:
-            ws.cell(start_row + 7, 6).value = initials
+            ws.cell(start_row + 8, 10).value = initials
 
         notes = (count["notes"] or "").strip()
         if notes:
