@@ -12,8 +12,9 @@
   <div class="card-body">
     <form method="get" action="{{ url_for('daily_activity_reports') }}" class="row g-2 align-items-end">
       <div class="col-12 col-md-4">
-        <label class="form-label">Date (YYYY-MM-DD or MM/DD/YYYY)</label>
-        <input class="form-control" name="date" value="{{ date }}" placeholder="YYYY-MM-DD">
+        <label class="form-label">Date</label>
+        <input class="form-control" type="date" name="date" value="{{ date }}" placeholder="YYYY-MM-DD">
+        <div class="form-text text-white-50">Select a day or enter YYYY-MM-DD.</div>
       </div>
       <div class="col-12 col-md-2">
         <button class="btn btn-light w-100" type="submit">Update</button>
