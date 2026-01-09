@@ -292,12 +292,11 @@
 
       const startScan = async () => {
         statusEl.textContent = "Starting camera…";
-        if (!("BarcodeDetector" in window)) {
-          statusEl.textContent = "Barcode scanning is not supported on this browser.";
-          supportEl.classList.remove("d-none");
+        supportEl.classList.add("d-none");
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          statusEl.textContent = "Camera access is not available in this browser.";
           return;
         }
-        supportEl.classList.add("d-none");
         try {
           activeStream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { ideal: "environment" } },
@@ -305,15 +304,27 @@
           });
           videoEl.srcObject = activeStream;
           await videoEl.play();
-          if (!detector) {
-            detector = new BarcodeDetector({ formats });
-          }
-          scanning = true;
-          statusEl.textContent = "Point the camera at the UPC barcode.";
-          scanLoop();
         } catch (err) {
-          statusEl.textContent = "Camera access was blocked. Check permissions.";
+          if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) {
+            statusEl.textContent =
+              "Camera access was blocked. Check permissions and make sure this page is loaded over HTTPS.";
+          } else {
+            statusEl.textContent = "Camera access was blocked. Check permissions.";
+          }
+          return;
         }
+        if (!("BarcodeDetector" in window)) {
+          statusEl.textContent = "Barcode scanning is not supported on this browser.";
+          supportEl.classList.remove("d-none");
+          stopStream();
+          return;
+        }
+        if (!detector) {
+          detector = new BarcodeDetector({ formats });
+        }
+        scanning = true;
+        statusEl.textContent = "Point the camera at the UPC barcode.";
+        scanLoop();
       };
 
       modalEl.addEventListener("hidden.bs.modal", () => {
@@ -326,12 +337,6 @@
         statusEl.textContent = "";
       });
 
-      modalEl.addEventListener("shown.bs.modal", () => {
-        if (activeInput) {
-          startScan();
-        }
-      });
-
       scanButtons.forEach((btn) => {
         btn.addEventListener("click", () => {
           const targetId = btn.getAttribute("data-upc-scan-target");
@@ -339,6 +344,7 @@
           if (!target) return;
           activeInput = target;
           modal.show();
+          startScan();
         });
       });
     });
