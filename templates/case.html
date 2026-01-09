@@ -115,7 +115,12 @@
           <input class="form-control" name="description" placeholder="Only fills blank product descriptions">
 
           <label class="form-label text-white-50 mb-0 mt-2">UPCs to move</label>
-          <textarea class="form-control mono" name="upcs" rows="5" placeholder="Scan UPCs here…"></textarea>
+          <div class="d-flex flex-column gap-2">
+            <textarea class="form-control mono" id="case-move-upcs" name="upcs" rows="5" placeholder="Scan UPCs here…"></textarea>
+            <button class="btn btn-outline-light align-self-start" type="button" data-upc-scan-target="case-move-upcs">
+              Scan UPC
+            </button>
+          </div>
 
           <button class="btn btn-light">Move</button>
         </form>
@@ -155,7 +160,12 @@
   </div>
 
   <label class="form-label text-white-50 mb-0">UPCs sold</label>
-          <textarea class="form-control mono" name="upcs" rows="4" placeholder="Scan UPCs here…"></textarea>
+          <div class="d-flex flex-column gap-2">
+            <textarea class="form-control mono" id="case-sell-upcs" name="upcs" rows="4" placeholder="Scan UPCs here…"></textarea>
+            <button class="btn btn-outline-light align-self-start" type="button" data-upc-scan-target="case-sell-upcs">
+              Scan UPC
+            </button>
+          </div>
           <button class="btn btn-warning">Mark Sold</button>
         </form>
       </div>
@@ -166,7 +176,12 @@
 
         <form method="post" action="{{ url_for('missing_from_case', case_code=case.case_code) }}" class="d-grid gap-2">
           <label class="form-label text-white-50 mb-0">UPCs missing</label>
-          <textarea class="form-control mono" name="upcs" rows="4" placeholder="Scan UPCs here…"></textarea>
+          <div class="d-flex flex-column gap-2">
+            <textarea class="form-control mono" id="case-missing-upcs" name="upcs" rows="4" placeholder="Scan UPCs here…"></textarea>
+            <button class="btn btn-outline-light align-self-start" type="button" data-upc-scan-target="case-missing-upcs">
+              Scan UPC
+            </button>
+          </div>
 
           <label class="form-label text-white-50 mb-0 mt-2">Notes (optional)</label>
           <input class="form-control" name="notes" placeholder="e.g., Audit variance / could not locate">
