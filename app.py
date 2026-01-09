@@ -2241,4 +2241,17 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "5000"))
     debug = os.getenv("FLASK_DEBUG", "1").strip() == "1"
-    app.run(host=host, port=port, debug=debug)
+    use_https = os.getenv("USE_HTTPS", "1").strip() == "1"
+    cert_file = os.getenv("SSL_CERT_FILE")
+    key_file = os.getenv("SSL_KEY_FILE")
+    ssl_context = None
+    if use_https:
+        if cert_file and key_file:
+            ssl_context = (cert_file, key_file)
+        else:
+            ssl_context = "adhoc"
+        app.config.update(
+            PREFERRED_URL_SCHEME="https",
+            SESSION_COOKIE_SECURE=True,
+        )
+    app.run(host=host, port=port, debug=debug, ssl_context=ssl_context)
