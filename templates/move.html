@@ -46,8 +46,13 @@
             <div class="fw-bold fs-5">Pick items from the From case</div>
             <div class="text-white-50">Check an item and set the quantity to move (max = qty in the case).</div>
           </div>
-          <input id="pickFilter" class="form-control" style="max-width: 420px;"
-                 placeholder="Filter by UPC, type, or description…">
+          <div class="d-flex flex-column flex-md-row gap-2 align-items-start">
+            <input id="pickFilter" class="form-control" style="max-width: 420px;"
+                   placeholder="Filter by UPC, type, or description…">
+            <button class="btn btn-outline-light align-self-start" type="button" data-upc-scan-target="pickFilter">
+              Scan UPC
+            </button>
+          </div>
         </div>
 
         <div class="my-3 divider"></div>
