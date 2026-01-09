@@ -61,8 +61,13 @@
     <div class="glass-soft p-3 p-md-4">
       <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div class="fw-bold fs-5">Case Items</div>
-        <input id="filterBox" class="form-control" style="max-width: 420px;"
-               placeholder="Filter by UPC, type, or description…">
+        <div class="d-flex flex-column flex-md-row gap-2 align-items-start">
+          <input id="filterBox" class="form-control" style="max-width: 420px;"
+                 placeholder="Filter by UPC, type, or description…">
+          <button class="btn btn-outline-light align-self-start" type="button" data-upc-scan-target="filterBox">
+            Scan UPC
+          </button>
+        </div>
       </div>
 
       <div class="table-responsive">
