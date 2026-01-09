@@ -39,7 +39,14 @@
 
     {% if last_count %}
       <div class="text-white-50 small mt-3">
-        Latest physical count today: Grand Total <span class="mono text-white">{{ last_count.total }}</span>
+        Latest physical count today:
+        Case {% for cat in count_categories %}
+          {{ cat.short }} <span class="mono text-white">{{ last_count[cat.count_key] }}</span>{% if not loop.last %}, {% endif %}
+        {% endfor %};
+        Reserve {% for cat in count_categories %}
+          {{ cat.short }} <span class="mono text-white">{{ last_count["reserve_" ~ cat.count_key] }}</span>{% if not loop.last %}, {% endif %}
+        {% endfor %};
+        Grand Total <span class="mono text-white">{{ last_count.total }}</span>
         {% if last_count.username %} — {{ last_count.username }}{% endif %}
         {% if last_count.total != sys_combined.total %}
           <span class="ms-2 chip">Δ <strong class="text-white">{{ last_count.total - sys_combined.total }}</strong></span>
