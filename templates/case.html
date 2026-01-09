@@ -9,30 +9,62 @@
         {% if case.is_virtual %}<span class="chip">Virtual</span>{% endif %}
       </div>
       <div class="text-white-50">{{ case.case_name }}</div>
-      <div class="d-flex gap-2 flex-wrap mt-2">
-        <span class="chip">Case UPCs: <strong class="text-white">{{ case_totals.distinct_upcs }}</strong></span>
-        <span class="chip">Case Units: <strong class="text-white">{{ case_totals.total_qty }}</strong></span>
-        <span class="chip">Reserve UPCs: <strong class="text-white">{{ reserve_totals.distinct_upcs }}</strong></span>
-        <span class="chip">Reserve Units: <strong class="text-white">{{ reserve_totals.total_qty }}</strong></span>
-        <span class="chip">Total Units: <strong class="text-white">{{ totals.total_qty }}</strong></span>
-        {% for cat in count_categories %}
-          <span class="chip">Total {{ cat.plural }}: <strong class="text-white">{{ combined_type_totals[cat.count_key] }}</strong></span>
-        {% endfor %}
+      <div class="row g-2 mt-3">
+        <div class="col-12 col-md-4">
+          <div class="glass-soft p-3 h-100">
+            <div class="fw-bold text-uppercase small text-white-50 mb-2">Case</div>
+            <div class="d-grid gap-1">
+              {% for cat in count_categories %}
+                <div class="d-flex justify-content-between">
+                  <span>{{ cat.plural }}</span>
+                  <span class="fw-bold">{{ case_type_totals[cat.count_key] }}</span>
+                </div>
+              {% endfor %}
+              <div class="d-flex justify-content-between border-top pt-1 mt-1">
+                <span>Total</span>
+                <span class="fw-bold">{{ case_totals.total_qty }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-md-4">
+          <div class="glass-soft p-3 h-100">
+            <div class="fw-bold text-uppercase small text-white-50 mb-2">Reserve</div>
+            <div class="d-grid gap-1">
+              {% for cat in count_categories %}
+                <div class="d-flex justify-content-between">
+                  <span>{{ cat.plural }}</span>
+                  <span class="fw-bold">{{ reserve_type_totals[cat.count_key] }}</span>
+                </div>
+              {% endfor %}
+              <div class="d-flex justify-content-between border-top pt-1 mt-1">
+                <span>Total</span>
+                <span class="fw-bold">{{ reserve_totals.total_qty }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-md-4">
+          <div class="glass-soft p-3 h-100">
+            <div class="fw-bold text-uppercase small text-white-50 mb-2">Total</div>
+            <div class="d-grid gap-1">
+              {% for cat in count_categories %}
+                <div class="d-flex justify-content-between">
+                  <span>{{ cat.plural }}</span>
+                  <span class="fw-bold">{{ combined_type_totals[cat.count_key] }}</span>
+                </div>
+              {% endfor %}
+              <div class="d-flex justify-content-between border-top pt-1 mt-1">
+                <span>Total</span>
+                <span class="fw-bold">{{ totals.total_qty }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="mt-2">
         <a class="chip text-decoration-none" href="{{ url_for('export_case', case_code=case.case_code) }}">Export Case CSV</a>
       </div>
-      <div class="d-flex gap-2 flex-wrap mt-2">
-        {% for cat in count_categories %}
-          <span class="chip">Case {{ cat.plural }}: <strong class="text-white">{{ case_type_totals[cat.count_key] }}</strong></span>
-        {% endfor %}
-      </div>
-      <div class="d-flex gap-2 flex-wrap mt-2">
-        {% for cat in count_categories %}
-          <span class="chip">Reserve {{ cat.plural }}: <strong class="text-white">{{ reserve_type_totals[cat.count_key] }}</strong></span>
-        {% endfor %}
-      </div>
-      {% if combined_type_totals.unknown and combined_type_totals.unknown > 0 %}
-        <div class="mt-2"><span class="chip">Unknown type: <strong class="text-white">{{ combined_type_totals.unknown }}</strong></span></div>
-      {% endif %}
       {% if last_count %}
         <div class="mt-2 text-white-50 small">
           Today\'s physical count ({{ last_count.local_date|mmddyyyy }}):
