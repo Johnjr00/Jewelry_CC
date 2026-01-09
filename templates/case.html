@@ -10,23 +10,29 @@
       </div>
       <div class="text-white-50">{{ case.case_name }}</div>
       <div class="d-flex gap-2 flex-wrap mt-2">
-        <span class="chip">UPCs: <strong class="text-white">{{ totals.distinct_upcs }}</strong></span>
-        <span class="chip">Units: <strong class="text-white">{{ totals.total_qty }}</strong></span>
+        <span class="chip">Case UPCs: <strong class="text-white">{{ case_totals.distinct_upcs }}</strong></span>
+        <span class="chip">Case Units: <strong class="text-white">{{ case_totals.total_qty }}</strong></span>
+        <span class="chip">Reserve UPCs: <strong class="text-white">{{ reserve_totals.distinct_upcs }}</strong></span>
+        <span class="chip">Reserve Units: <strong class="text-white">{{ reserve_totals.total_qty }}</strong></span>
+        <span class="chip">Total Units: <strong class="text-white">{{ totals.total_qty }}</strong></span>
         {% for cat in count_categories %}
-          <span class="chip">{{ cat.plural }}: <strong class="text-white">{{ type_totals[cat.count_key] }}</strong></span>
+          <span class="chip">Total {{ cat.plural }}: <strong class="text-white">{{ combined_type_totals[cat.count_key] }}</strong></span>
         {% endfor %}
         <a class="chip text-decoration-none" href="{{ url_for('export_case', case_code=case.case_code) }}">Export Case CSV</a>
       </div>
-      {% if type_totals.unknown and type_totals.unknown > 0 %}
-        <div class="mt-2"><span class="chip">Unknown type: <strong class="text-white">{{ type_totals.unknown }}</strong></span></div>
+      {% if combined_type_totals.unknown and combined_type_totals.unknown > 0 %}
+        <div class="mt-2"><span class="chip">Unknown type: <strong class="text-white">{{ combined_type_totals.unknown }}</strong></span></div>
       {% endif %}
       {% if last_count %}
         <div class="mt-2 text-white-50 small">
           Today\'s physical count ({{ last_count.local_date|mmddyyyy }}):
-          {% for cat in count_categories %}
+          Case {% for cat in count_categories %}
             {{ cat.plural }} <span class="mono">{{ last_count[cat.count_key] }}</span>{% if not loop.last %},{% endif %}
-          {% endfor %},
-          Total <span class="mono">{{ last_count.total }}</span>
+          {% endfor %};
+          Reserve {% for cat in count_categories %}
+            {{ cat.plural }} <span class="mono">{{ last_count["reserve_" ~ cat.count_key] }}</span>{% if not loop.last %},{% endif %}
+          {% endfor %};
+          Grand Total <span class="mono">{{ last_count.total }}</span>
           {% if last_count.username %} — by {{ last_count.username }}{% endif %}
         </div>
       {% endif %}
@@ -54,7 +60,7 @@
   <div class="col-12 col-lg-7">
     <div class="glass-soft p-3 p-md-4">
       <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-        <div class="fw-bold fs-5">Current Items</div>
+        <div class="fw-bold fs-5">Case Items</div>
         <input id="filterBox" class="form-control" style="max-width: 420px;"
                placeholder="Filter by UPC, type, or description…">
       </div>
@@ -89,6 +95,38 @@
         Bulk scans accept one UPC per line, or <span class="mono">UPC,qty</span>. Duplicate scans automatically add quantity.
       </div>
     </div>
+
+    <div class="glass-soft p-3 p-md-4 mt-3">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div class="fw-bold fs-5">Reserve Items</div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0">
+          <thead>
+            <tr>
+              <th style="width: 180px;">UPC</th>
+              <th style="width: 120px;">Type</th>
+              <th>Description</th>
+              <th class="text-end" style="width: 90px;">Qty</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for i in reserve_items %}
+            <tr>
+              <td class="mono">{{ i.upc }}</td>
+              <td>{{ i.item_type or "" }}</td>
+              <td>{{ i.description or "" }}</td>
+              <td class="text-end fw-bold">{{ i.qty }}</td>
+            </tr>
+            {% endfor %}
+            {% if reserve_items|length == 0 %}
+              <tr><td colspan="4" class="text-white-50">No inventory in reserve drawers.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <div class="col-12 col-lg-5">
@@ -118,6 +156,40 @@
           <div class="d-flex flex-column gap-2">
             <textarea class="form-control mono" id="case-move-upcs" name="upcs" rows="5" placeholder="Scan UPCs here…"></textarea>
             <button class="btn btn-outline-light align-self-start" type="button" data-upc-scan-target="case-move-upcs">
+              Scan UPC
+            </button>
+          </div>
+
+          <button class="btn btn-light">Move</button>
+        </form>
+      </div>
+
+      <div class="glass p-3 p-md-4">
+        <div class="fw-bold fs-5 mb-2">Move Case ↔ Reserve</div>
+        <div class="text-white-50 mb-3">Shift items between the glass case and reserve drawers.</div>
+
+        <form method="post" action="{{ url_for('transfer_case_location', case_code=case.case_code) }}" class="d-grid gap-2">
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label text-white-50 mb-0">From</label>
+              <select class="form-select" name="from_location" required>
+                <option value="CASE">Case</option>
+                <option value="RESERVE">Reserve</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label text-white-50 mb-0">To</label>
+              <select class="form-select" name="to_location" required>
+                <option value="RESERVE">Reserve</option>
+                <option value="CASE">Case</option>
+              </select>
+            </div>
+          </div>
+
+          <label class="form-label text-white-50 mb-0 mt-2">UPCs to move</label>
+          <div class="d-flex flex-column gap-2">
+            <textarea class="form-control mono" id="case-transfer-upcs" name="upcs" rows="4" placeholder="Scan UPCs here…"></textarea>
+            <button class="btn btn-outline-light align-self-start" type="button" data-upc-scan-target="case-transfer-upcs">
               Scan UPC
             </button>
           </div>

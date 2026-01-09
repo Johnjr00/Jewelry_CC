@@ -22,20 +22,27 @@
     <div class="fw-bold fs-5 mb-2">System (live) totals</div>
     <div class="d-flex flex-wrap gap-2">
       {% for cat in count_categories %}
-        <span class="chip">{{ cat.plural }}: <strong class="text-white">{{ sys[cat.count_key] }}</strong></span>
+        <span class="chip">Case {{ cat.plural }}: <strong class="text-white">{{ sys_case[cat.count_key] }}</strong></span>
       {% endfor %}
-      <span class="chip">Total: <strong class="text-white">{{ sys.total }}</strong></span>
-      {% if sys.unknown and sys.unknown > 0 %}
-        <span class="chip">Unknown type: <strong class="text-white">{{ sys.unknown }}</strong></span>
+      <span class="chip">Case Total: <strong class="text-white">{{ sys_case.total }}</strong></span>
+    </div>
+    <div class="d-flex flex-wrap gap-2 mt-2">
+      {% for cat in count_categories %}
+        <span class="chip">Reserve {{ cat.plural }}: <strong class="text-white">{{ sys_reserve[cat.count_key] }}</strong></span>
+      {% endfor %}
+      <span class="chip">Reserve Total: <strong class="text-white">{{ sys_reserve.total }}</strong></span>
+      <span class="chip">Grand Total: <strong class="text-white">{{ sys_combined.total }}</strong></span>
+      {% if sys_combined.unknown and sys_combined.unknown > 0 %}
+        <span class="chip">Unknown type: <strong class="text-white">{{ sys_combined.unknown }}</strong></span>
       {% endif %}
     </div>
 
     {% if last_count %}
       <div class="text-white-50 small mt-3">
-        Latest physical count today: Total <span class="mono text-white">{{ last_count.total }}</span>
+        Latest physical count today: Grand Total <span class="mono text-white">{{ last_count.total }}</span>
         {% if last_count.username %} — {{ last_count.username }}{% endif %}
-        {% if last_count.total != sys.total %}
-          <span class="ms-2 chip">Δ <strong class="text-white">{{ last_count.total - sys.total }}</strong></span>
+        {% if last_count.total != sys_combined.total %}
+          <span class="ms-2 chip">Δ <strong class="text-white">{{ last_count.total - sys_combined.total }}</strong></span>
         {% endif %}
       </div>
     {% endif %}
@@ -45,18 +52,30 @@
     <div class="fw-bold fs-5">Enter physical count</div>
 
     <div class="row g-3">
+      <div class="col-12">
+        <div class="fw-bold text-white-50 mb-2">Case</div>
+      </div>
       {% for cat in count_categories %}
         <div class="col-6 col-md-3">
           <label class="form-label text-white-50">{{ cat.plural }}</label>
-          <input class="form-control" type="number" min="0" name="{{ cat.count_key }}" id="{{ cat.count_key }}" value="0" required>
+          <input class="form-control" type="number" min="0" name="{{ cat.count_key }}" id="case-{{ cat.count_key }}" value="0" required>
+        </div>
+      {% endfor %}
+      <div class="col-12">
+        <div class="fw-bold text-white-50 mb-2 mt-2">Reserve</div>
+      </div>
+      {% for cat in count_categories %}
+        <div class="col-6 col-md-3">
+          <label class="form-label text-white-50">{{ cat.plural }}</label>
+          <input class="form-control" type="number" min="0" name="reserve_{{ cat.count_key }}" id="reserve-{{ cat.count_key }}" value="0" required>
         </div>
       {% endfor %}
     </div>
 
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
-      <div class="chip">Total: <strong class="text-white" id="totalOut">0</strong></div>
+      <div class="chip">Grand Total: <strong class="text-white" id="totalOut">0</strong></div>
       <div class="text-white-50 small">
-        Total auto-calculates ({% for cat in count_categories %}{{ cat.plural }}{% if not loop.last %} + {% endif %}{% endfor %}).
+        Total auto-calculates (Case + Reserve).
       </div>
     </div>
 
@@ -73,7 +92,10 @@
 </div>
 
 <script>
-  const ids = [{% for cat in count_categories %}"{{ cat.count_key }}"{% if not loop.last %}, {% endif %}{% endfor %}];
+  const ids = [
+    {% for cat in count_categories %}"case-{{ cat.count_key }}"{% if not loop.last %}, {% endif %}{% endfor %},
+    {% for cat in count_categories %}"reserve-{{ cat.count_key }}"{% if not loop.last %}, {% endif %}{% endfor %}
+  ];
   function calc(){
     let t = 0;
     for (const id of ids) t += parseInt(document.getElementById(id).value || "0", 10);
