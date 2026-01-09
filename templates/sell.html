@@ -18,7 +18,12 @@
 
     <div class="col-8 col-md-4">
       <label class="form-label text-white-50">UPC</label>
-      <input class="form-control mono" name="upc" data-autofocus="true" required>
+      <div class="input-group">
+        <input class="form-control mono" id="sell-upc" name="upc" data-autofocus="true" required>
+        <button class="btn btn-outline-light" type="button" data-upc-scan-target="sell-upc">
+          Scan UPC
+        </button>
+      </div>
     </div>
 
     <div class="col-4 col-md-2">

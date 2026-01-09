@@ -25,7 +25,12 @@
 
     <div class="col-12">
       <label class="form-label text-white-50">UPCs</label>
-      <textarea class="form-control mono" name="upcs" rows="10" data-autofocus="true" placeholder="Scan here…"></textarea>
+      <div class="input-group">
+        <textarea class="form-control mono" id="receive-upcs" name="upcs" rows="10" data-autofocus="true" placeholder="Scan here…"></textarea>
+        <button class="btn btn-outline-light" type="button" data-upc-scan-target="receive-upcs">
+          Scan UPC
+        </button>
+      </div>
     </div>
 
     <div class="col-12 d-flex gap-2">
