@@ -293,6 +293,10 @@
       const startScan = async () => {
         statusEl.textContent = "Starting camera…";
         supportEl.classList.add("d-none");
+        if (!window.isSecureContext) {
+          statusEl.textContent = "Camera access requires HTTPS.";
+          return;
+        }
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           statusEl.textContent = "Camera access is not available in this browser.";
           return;
@@ -305,12 +309,7 @@
           videoEl.srcObject = activeStream;
           await videoEl.play();
         } catch (err) {
-          if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) {
-            statusEl.textContent =
-              "Camera access was blocked. Check permissions and make sure this page is loaded over HTTPS.";
-          } else {
-            statusEl.textContent = "Camera access was blocked. Check permissions.";
-          }
+          statusEl.textContent = "Camera access was blocked. Check permissions.";
           return;
         }
         if (!("BarcodeDetector" in window)) {
