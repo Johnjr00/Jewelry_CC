@@ -292,12 +292,15 @@
 
       const startScan = async () => {
         statusEl.textContent = "Starting camera…";
-        if (!("BarcodeDetector" in window)) {
-          statusEl.textContent = "Barcode scanning is not supported on this browser.";
-          supportEl.classList.remove("d-none");
+        supportEl.classList.add("d-none");
+        if (!window.isSecureContext) {
+          statusEl.textContent = "Camera access requires HTTPS.";
           return;
         }
-        supportEl.classList.add("d-none");
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          statusEl.textContent = "Camera access is not available in this browser.";
+          return;
+        }
         try {
           activeStream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { ideal: "environment" } },
@@ -305,15 +308,22 @@
           });
           videoEl.srcObject = activeStream;
           await videoEl.play();
-          if (!detector) {
-            detector = new BarcodeDetector({ formats });
-          }
-          scanning = true;
-          statusEl.textContent = "Point the camera at the UPC barcode.";
-          scanLoop();
         } catch (err) {
           statusEl.textContent = "Camera access was blocked. Check permissions.";
+          return;
         }
+        if (!("BarcodeDetector" in window)) {
+          statusEl.textContent = "Barcode scanning is not supported on this browser.";
+          supportEl.classList.remove("d-none");
+          stopStream();
+          return;
+        }
+        if (!detector) {
+          detector = new BarcodeDetector({ formats });
+        }
+        scanning = true;
+        statusEl.textContent = "Point the camera at the UPC barcode.";
+        scanLoop();
       };
 
       modalEl.addEventListener("hidden.bs.modal", () => {
