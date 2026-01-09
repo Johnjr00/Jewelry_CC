@@ -201,6 +201,27 @@
             </div>
           </div>
 
+          <div class="mt-2">
+            <label class="form-label text-white-50 mb-1">Select case items to move</label>
+            <div class="list-group list-group-flush small" style="max-height: 220px; overflow-y: auto;">
+              {% for i in items %}
+              <label class="list-group-item bg-transparent text-white d-flex gap-2 align-items-start">
+                <input class="form-check-input mt-1 case-move-item" type="checkbox" value="{{ i.upc }}" data-qty="{{ i.qty }}">
+                <span>
+                  <span class="mono">{{ i.upc }}</span>
+                  {% if i.item_type %}<span class="text-white-50"> · {{ i.item_type }}</span>{% endif %}
+                  {% if i.description %}<div class="text-white-50">{{ i.description }}</div>{% endif %}
+                  <div class="text-white-50">Qty: {{ i.qty }}</div>
+                </span>
+              </label>
+              {% endfor %}
+              {% if items|length == 0 %}
+                <div class="text-white-50">No inventory in this case.</div>
+              {% endif %}
+            </div>
+            <div class="text-white-50 small mt-1">Selections populate the UPC list below (defaults to full quantity).</div>
+          </div>
+
           <label class="form-label text-white-50 mb-0 mt-2">UPCs to move</label>
           <div class="d-flex flex-column gap-2">
             <textarea class="form-control mono" id="case-transfer-upcs" name="upcs" rows="4" placeholder="Scan UPCs here…"></textarea>
@@ -265,6 +286,8 @@
 <script>
   const filterBox = document.getElementById("filterBox");
   const table = document.getElementById("invTable");
+  const moveTarget = document.getElementById("case-transfer-upcs");
+  const moveCheckboxes = document.querySelectorAll(".case-move-item");
 
   if (filterBox && table) {
     filterBox.addEventListener("input", () => {
@@ -273,6 +296,31 @@
         const text = row.innerText.toLowerCase();
         row.style.display = text.includes(q) ? "" : "none";
       }
+    });
+  }
+
+  if (moveTarget && moveCheckboxes.length) {
+    const syncMoveList = () => {
+      const lines = [];
+      moveCheckboxes.forEach((checkbox) => {
+        if (checkbox.checked) {
+          const upc = checkbox.value;
+          const qty = parseInt(checkbox.dataset.qty || "1", 10);
+          if (!upc) {
+            return;
+          }
+          if (Number.isFinite(qty) && qty > 1) {
+            lines.push(`${upc},${qty}`);
+          } else {
+            lines.push(upc);
+          }
+        }
+      });
+      moveTarget.value = lines.join("\n");
+    };
+
+    moveCheckboxes.forEach((checkbox) => {
+      checkbox.addEventListener("change", syncMoveList);
     });
   }
 </script>
