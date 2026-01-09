@@ -18,7 +18,12 @@
 
     <div class="col-8 col-md-4">
       <label class="form-label text-white-50">UPC</label>
-      <input class="form-control mono" name="upc" data-autofocus="true" required>
+      <div class="d-flex flex-column gap-2">
+        <input class="form-control mono" id="missing-upc" name="upc" data-autofocus="true" required>
+        <button class="btn btn-outline-light align-self-start" type="button" data-upc-scan-target="missing-upc">
+          Scan UPC
+        </button>
+      </div>
     </div>
 
     <div class="col-4 col-md-2">

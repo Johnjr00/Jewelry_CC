@@ -39,7 +39,12 @@
     {% else %}
       <div class="col-12 col-md-3">
         <label class="form-label text-white-50">Filter by UPC</label>
-        <input class="form-control mono" name="upc" value="{{ upc }}" placeholder="Optional">
+        <div class="d-flex flex-column gap-2">
+          <input class="form-control mono" id="history-upc" name="upc" value="{{ upc }}" placeholder="Optional">
+          <button class="btn btn-outline-light align-self-start" type="button" data-upc-scan-target="history-upc">
+            Scan UPC
+          </button>
+        </div>
       </div>
 
       <div class="col-12 col-md-3">
