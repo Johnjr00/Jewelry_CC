@@ -298,6 +298,48 @@
         supportEl.classList.add("d-none");
       };
 
+      const loadImageElement = (file) =>
+        new Promise((resolve, reject) => {
+          const img = new Image();
+          const url = URL.createObjectURL(file);
+          img.onload = () => {
+            URL.revokeObjectURL(url);
+            resolve(img);
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error("Image load failed."));
+          };
+          img.src = url;
+        });
+
+      const detectFromFile = async (file, activeDetector) => {
+        let source = null;
+        if ("createImageBitmap" in window) {
+          try {
+            source = await createImageBitmap(file);
+          } catch (error) {
+            source = null;
+          }
+        }
+        if (!source) {
+          source = await loadImageElement(file);
+        }
+        let barcodes = await activeDetector.detect(source);
+        if ((!barcodes || !barcodes.length) && source instanceof HTMLImageElement) {
+          const canvas = document.createElement("canvas");
+          canvas.width = source.naturalWidth || source.width;
+          canvas.height = source.naturalHeight || source.height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            barcodes = await activeDetector.detect(imageData);
+          }
+        }
+        return barcodes;
+      };
+
       const scanLoop = () => {
         if (!scanning || !detector) return;
         detector
@@ -365,8 +407,7 @@
           return;
         }
         try {
-          const bitmap = await createImageBitmap(file);
-          const barcodes = await activeDetector.detect(bitmap);
+          const barcodes = await detectFromFile(file, activeDetector);
           if (barcodes && barcodes.length) {
             appendValue(barcodes[0].rawValue);
             statusEl.textContent = `Captured ${barcodes[0].rawValue}`;
