@@ -326,12 +326,6 @@
         statusEl.textContent = "";
       });
 
-      modalEl.addEventListener("shown.bs.modal", () => {
-        if (activeInput) {
-          startScan();
-        }
-      });
-
       scanButtons.forEach((btn) => {
         btn.addEventListener("click", () => {
           const targetId = btn.getAttribute("data-upc-scan-target");
@@ -339,6 +333,7 @@
           if (!target) return;
           activeInput = target;
           modal.show();
+          startScan();
         });
       });
     });
