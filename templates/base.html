@@ -215,6 +215,13 @@
           <div class="text-white-50 mt-1 d-none" data-role="support">
             Barcode scanning needs a browser with BarcodeDetector support (Safari 16+ recommended).
           </div>
+          <div class="mt-3 d-none" data-role="capture">
+            <button class="btn btn-outline-light" type="button" data-role="capture-btn">Capture Photo</button>
+            <input class="d-none" data-role="capture-input" type="file" accept="image/*" capture="environment">
+            <div class="text-white-50 mt-2">
+              If the live camera preview is unavailable, take a photo of the barcode instead.
+            </div>
+          </div>
         </div>
         <div class="modal-footer border-0">
           <button class="btn btn-outline-light" type="button" data-bs-dismiss="modal">Close</button>
@@ -238,6 +245,9 @@
       const videoEl = document.getElementById("upcScannerVideo");
       const statusEl = modalEl.querySelector("[data-role='status']");
       const supportEl = modalEl.querySelector("[data-role='support']");
+      const captureEl = modalEl.querySelector("[data-role='capture']");
+      const captureBtn = modalEl.querySelector("[data-role='capture-btn']");
+      const captureInput = modalEl.querySelector("[data-role='capture-input']");
       const modal = new bootstrap.Modal(modalEl);
       let activeInput = null;
       let activeStream = null;
@@ -270,6 +280,24 @@
         activeInput.focus();
       };
 
+      const ensureDetector = () => {
+        if (!("BarcodeDetector" in window)) {
+          statusEl.textContent = "Barcode scanning is not supported on this browser.";
+          supportEl.classList.remove("d-none");
+          return null;
+        }
+        if (!detector) {
+          detector = new BarcodeDetector({ formats });
+        }
+        return detector;
+      };
+
+      const showCaptureFallback = (message) => {
+        statusEl.textContent = message;
+        captureEl.classList.remove("d-none");
+        supportEl.classList.add("d-none");
+      };
+
       const scanLoop = () => {
         if (!scanning || !detector) return;
         detector
@@ -293,38 +321,62 @@
       const startScan = async () => {
         statusEl.textContent = "Starting camera…";
         supportEl.classList.add("d-none");
+        captureEl.classList.add("d-none");
         if (!window.isSecureContext) {
-          statusEl.textContent = "Camera access requires HTTPS.";
+          showCaptureFallback("Live camera access requires HTTPS. Use photo capture instead.");
           return;
         }
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          statusEl.textContent = "Camera access is not available in this browser.";
+          showCaptureFallback("Live camera access is not available in this browser.");
           return;
         }
         try {
           activeStream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { ideal: "environment" } },
-            audio: false,
-          });
+          audio: false,
+        });
           videoEl.srcObject = activeStream;
           await videoEl.play();
         } catch (err) {
-          statusEl.textContent = "Camera access was blocked. Check permissions.";
+          showCaptureFallback("Camera access was blocked. Use photo capture instead.");
           return;
         }
-        if (!("BarcodeDetector" in window)) {
-          statusEl.textContent = "Barcode scanning is not supported on this browser.";
-          supportEl.classList.remove("d-none");
+        if (!ensureDetector()) {
           stopStream();
           return;
-        }
-        if (!detector) {
-          detector = new BarcodeDetector({ formats });
         }
         scanning = true;
         statusEl.textContent = "Point the camera at the UPC barcode.";
         scanLoop();
       };
+
+      captureBtn.addEventListener("click", () => {
+        if (!ensureDetector()) {
+          return;
+        }
+        captureInput.click();
+      });
+
+      captureInput.addEventListener("change", async (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+        statusEl.textContent = "Scanning photo…";
+        const activeDetector = ensureDetector();
+        if (!activeDetector) return;
+        try {
+          const bitmap = await createImageBitmap(file);
+          const barcodes = await activeDetector.detect(bitmap);
+          if (barcodes && barcodes.length) {
+            appendValue(barcodes[0].rawValue);
+            statusEl.textContent = `Captured ${barcodes[0].rawValue}`;
+            modal.hide();
+          } else {
+            statusEl.textContent = "No barcode detected in the photo. Try again.";
+          }
+        } catch (error) {
+          statusEl.textContent = "Could not read the photo. Try again.";
+        }
+      });
 
       modalEl.addEventListener("hidden.bs.modal", () => {
         scanning = false;
@@ -334,6 +386,7 @@
         }
         stopStream();
         statusEl.textContent = "";
+        captureInput.value = "";
       });
 
       scanButtons.forEach((btn) => {
