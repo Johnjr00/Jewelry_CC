@@ -99,7 +99,11 @@ ITEM_TYPES_ORDER = [c["name"] for c in _sorted_item_categories("receive_order")]
 ALLOWED_ITEM_TYPES = set(ITEM_TYPES_ORDER)
 COUNT_CATEGORIES = _sorted_item_categories("count_order")
 COUNT_FIELDS = [c["count_key"] for c in COUNT_CATEGORIES]
+RESERVE_COUNT_FIELDS = [f"reserve_{c['count_key']}" for c in COUNT_CATEGORIES]
 DIAMOND_TEST_OPTIONS = {"Y", "N", "NRT"}
+LOCATION_CASE = "CASE"
+LOCATION_RESERVE = "RESERVE"
+INVENTORY_LOCATIONS = {LOCATION_CASE, LOCATION_RESERVE}
 
 app = Flask(__name__)
 app.secret_key = "change-this-in-production"
@@ -132,6 +136,57 @@ def get_db() -> sqlite3.Connection:
             cols = [r["name"] for r in conn.execute("PRAGMA table_info(case_counts)").fetchall()]
             if "other" not in cols:
                 conn.execute("ALTER TABLE case_counts ADD COLUMN other INTEGER NOT NULL DEFAULT 0 CHECK(other >= 0)")
+            reserve_cols = {
+                "reserve_bracelets": "INTEGER NOT NULL DEFAULT 0 CHECK(reserve_bracelets >= 0)",
+                "reserve_rings": "INTEGER NOT NULL DEFAULT 0 CHECK(reserve_rings >= 0)",
+                "reserve_earrings": "INTEGER NOT NULL DEFAULT 0 CHECK(reserve_earrings >= 0)",
+                "reserve_necklaces": "INTEGER NOT NULL DEFAULT 0 CHECK(reserve_necklaces >= 0)",
+                "reserve_other": "INTEGER NOT NULL DEFAULT 0 CHECK(reserve_other >= 0)",
+            }
+            for col, ctype in reserve_cols.items():
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE case_counts ADD COLUMN {col} {ctype}")
+            if any(col not in cols for col in reserve_cols):
+                conn.execute(
+                    """
+                    UPDATE case_counts
+                    SET reserve_bracelets=0,
+                        reserve_rings=0,
+                        reserve_earrings=0,
+                        reserve_necklaces=0,
+                        reserve_other=0
+                    """
+                )
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            inv_cols = [r["name"] for r in conn.execute("PRAGMA table_info(inventory)").fetchall()]
+            if "location" not in inv_cols:
+                conn.execute("ALTER TABLE inventory RENAME TO inventory_old;")
+                conn.execute(
+                    """
+                    CREATE TABLE inventory (
+                        case_code TEXT NOT NULL,
+                        upc TEXT NOT NULL,
+                        location TEXT NOT NULL DEFAULT 'CASE' CHECK(location IN ('CASE','RESERVE')),
+                        qty INTEGER NOT NULL CHECK(qty >= 0),
+                        PRIMARY KEY(case_code, upc, location),
+                        FOREIGN KEY(case_code) REFERENCES cases(case_code),
+                        FOREIGN KEY(upc) REFERENCES products(upc)
+                    );
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO inventory (case_code, upc, location, qty)
+                    SELECT case_code, upc, 'CASE', qty FROM inventory_old;
+                    """
+                )
+                conn.execute("DROP TABLE inventory_old;")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_case ON inventory(case_code);")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_upc ON inventory(upc);")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_case_location ON inventory(case_code, location);")
         except sqlite3.OperationalError:
             pass
 
@@ -237,8 +292,9 @@ def init_db():
         CREATE TABLE IF NOT EXISTS inventory (
             case_code TEXT NOT NULL,
             upc TEXT NOT NULL,
+            location TEXT NOT NULL DEFAULT 'CASE' CHECK(location IN ('CASE','RESERVE')),
             qty INTEGER NOT NULL CHECK(qty >= 0),
-            PRIMARY KEY(case_code, upc),
+            PRIMARY KEY(case_code, upc, location),
             FOREIGN KEY(case_code) REFERENCES cases(case_code),
             FOREIGN KEY(upc) REFERENCES products(upc)
         );
@@ -265,6 +321,11 @@ CREATE TABLE IF NOT EXISTS case_counts (
     earrings INTEGER NOT NULL CHECK(earrings >= 0),
     necklaces INTEGER NOT NULL CHECK(necklaces >= 0),
     other INTEGER NOT NULL DEFAULT 0 CHECK(other >= 0),
+    reserve_bracelets INTEGER NOT NULL DEFAULT 0 CHECK(reserve_bracelets >= 0),
+    reserve_rings INTEGER NOT NULL DEFAULT 0 CHECK(reserve_rings >= 0),
+    reserve_earrings INTEGER NOT NULL DEFAULT 0 CHECK(reserve_earrings >= 0),
+    reserve_necklaces INTEGER NOT NULL DEFAULT 0 CHECK(reserve_necklaces >= 0),
+    reserve_other INTEGER NOT NULL DEFAULT 0 CHECK(reserve_other >= 0),
     total INTEGER NOT NULL CHECK(total >= 0),
     notes TEXT,
     FOREIGN KEY(case_code) REFERENCES cases(case_code),
@@ -295,6 +356,7 @@ CREATE INDEX IF NOT EXISTS idx_case_counts_case ON case_counts(case_code);
 
         CREATE INDEX IF NOT EXISTS idx_inv_case ON inventory(case_code);
         CREATE INDEX IF NOT EXISTS idx_inv_upc ON inventory(upc);
+        CREATE INDEX IF NOT EXISTS idx_inv_case_location ON inventory(case_code, location);
         CREATE INDEX IF NOT EXISTS idx_hist_upc ON history(upc);
         CREATE INDEX IF NOT EXISTS idx_hist_case_from ON history(from_case_code);
         CREATE INDEX IF NOT EXISTS idx_hist_case_to ON history(to_case_code);
@@ -708,9 +770,12 @@ def build_daily_count_workbook(case_code: str, local_date: str):
             "other": start_row + 7,
         }
         for key, row in row_map.items():
-            value = int(count[key])
-            ws.cell(row, 10).value = value
-            ws.cell(row, 12).value = value
+            case_value = int(count[key])
+            reserve_value = int(count[f"reserve_{key}"])
+            total_value = case_value + reserve_value
+            ws.cell(row, 10).value = case_value
+            ws.cell(row, 11).value = reserve_value
+            ws.cell(row, 12).value = total_value
 
         total = int(count["total"])
         ws.cell(start_row + 8, 12).value = total
@@ -735,7 +800,7 @@ def counts():
         f"""
         SELECT c.case_code, c.case_name, c.is_virtual, c.is_active,
                COALESCE(SUM(i.qty), 0) AS total_qty,
-               COALESCE(COUNT(i.upc), 0) AS distinct_upcs
+               COALESCE(COUNT(DISTINCT i.upc), 0) AS distinct_upcs
         FROM cases c
         LEFT JOIN inventory i ON i.case_code = c.case_code
         WHERE c.is_active = 1
@@ -760,7 +825,14 @@ def counts():
     ).fetchall()
     counts_map = {r["case_code"]: r for r in counts_rows}
 
-    sys_totals = {c["case_code"]: case_type_totals(c["case_code"]) for c in cases}
+    sys_totals = {
+        c["case_code"]: {
+            "case": case_type_totals(c["case_code"], LOCATION_CASE),
+            "reserve": case_type_totals(c["case_code"], LOCATION_RESERVE),
+            "combined": case_type_totals(c["case_code"]),
+        }
+        for c in cases
+    }
 
     return render_template(
         "counts.html",
@@ -789,7 +861,9 @@ def count_case(case_code: str):
         return redirect(url_for("counts"))
 
     today = local_date_str()
-    sys = case_type_totals(case_code)
+    sys_case = case_type_totals(case_code, LOCATION_CASE)
+    sys_reserve = case_type_totals(case_code, LOCATION_RESERVE)
+    sys_combined = case_type_totals(case_code)
 
     last_count = db.execute(
         """
@@ -810,24 +884,31 @@ def count_case(case_code: str):
                 return -1
 
         counts = {field: to_int(field) for field in COUNT_FIELDS}
+        reserve_counts = {field: to_int(field) for field in RESERVE_COUNT_FIELDS}
         notes = (request.form.get("notes") or "").strip() or None
 
-        if any(value < 0 for value in counts.values()):
+        if any(value < 0 for value in counts.values()) or any(value < 0 for value in reserve_counts.values()):
             flash("Counts must be whole numbers (0 or higher).", "danger")
             return redirect(url_for("count_case", case_code=case_code))
 
-        total = sum(counts.values())
+        total = sum(counts.values()) + sum(reserve_counts.values())
         u = current_user()
 
         db.execute(
             """
             INSERT INTO case_counts
-              (ts_utc, local_date, case_code, user_id, username, bracelets, rings, earrings, necklaces, other, total, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+              (ts_utc, local_date, case_code, user_id, username,
+               bracelets, rings, earrings, necklaces, other,
+               reserve_bracelets, reserve_rings, reserve_earrings, reserve_necklaces, reserve_other,
+               total, notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (utc_now(), today, case_code,
              u.id if u else None, u.username if u else None,
-             counts["bracelets"], counts["rings"], counts["earrings"], counts["necklaces"], counts["other"], total, notes),
+             counts["bracelets"], counts["rings"], counts["earrings"], counts["necklaces"], counts["other"],
+             reserve_counts["reserve_bracelets"], reserve_counts["reserve_rings"], reserve_counts["reserve_earrings"],
+             reserve_counts["reserve_necklaces"], reserve_counts["reserve_other"],
+             total, notes),
         )
         db.commit()
 
@@ -838,7 +919,9 @@ def count_case(case_code: str):
         "count_case.html",
         case=case,
         today=today,
-        sys=sys,
+        sys_case=sys_case,
+        sys_reserve=sys_reserve,
+        sys_combined=sys_combined,
         last_count=last_count,
         count_categories=COUNT_CATEGORIES,
         user=current_user(),
@@ -953,23 +1036,27 @@ def upsert_product(upc: str, description: Optional[str], item_type: Optional[str
         )
 
 
-def add_qty(case_code: str, upc: str, qty: int):
+def add_qty(case_code: str, upc: str, qty: int, location: str = LOCATION_CASE):
     db = get_db()
+    if location not in INVENTORY_LOCATIONS:
+        location = LOCATION_CASE
     db.execute(
         """
-        INSERT INTO inventory (case_code, upc, qty)
-        VALUES (?, ?, ?)
-        ON CONFLICT(case_code, upc) DO UPDATE SET qty = qty + excluded.qty
+        INSERT INTO inventory (case_code, upc, location, qty)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(case_code, upc, location) DO UPDATE SET qty = qty + excluded.qty
         """,
-        (case_code, upc, qty),
+        (case_code, upc, location, qty),
     )
 
 
-def remove_qty(case_code: str, upc: str, qty: int) -> Tuple[bool, int]:
+def remove_qty(case_code: str, upc: str, qty: int, location: str = LOCATION_CASE) -> Tuple[bool, int]:
     db = get_db()
+    if location not in INVENTORY_LOCATIONS:
+        location = LOCATION_CASE
     row = db.execute(
-        "SELECT qty FROM inventory WHERE case_code=? AND upc=?",
-        (case_code, upc),
+        "SELECT qty FROM inventory WHERE case_code=? AND upc=? AND location=?",
+        (case_code, upc, location),
     ).fetchone()
     if not row:
         return False, 0
@@ -979,11 +1066,11 @@ def remove_qty(case_code: str, upc: str, qty: int) -> Tuple[bool, int]:
 
     new_qty = have - qty
     if new_qty == 0:
-        db.execute("DELETE FROM inventory WHERE case_code=? AND upc=?", (case_code, upc))
+        db.execute("DELETE FROM inventory WHERE case_code=? AND upc=? AND location=?", (case_code, upc, location))
     else:
         db.execute(
-            "UPDATE inventory SET qty=? WHERE case_code=? AND upc=?",
-            (new_qty, case_code, upc),
+            "UPDATE inventory SET qty=? WHERE case_code=? AND upc=? AND location=?",
+            (new_qty, case_code, upc, location),
         )
     return True, new_qty
 
@@ -1001,13 +1088,15 @@ def case_order_sql() -> str:
         END,
         c.case_code
     """
-def _validate_have_qty(case_code: str, upc_map: Dict[str, int]) -> list[str]:
+def _validate_have_qty(case_code: str, upc_map: Dict[str, int], location: str = LOCATION_CASE) -> list[str]:
     db = get_db()
+    if location not in INVENTORY_LOCATIONS:
+        location = LOCATION_CASE
     problems = []
     for upc, need in upc_map.items():
         row = db.execute(
-            "SELECT qty FROM inventory WHERE case_code=? AND upc=?",
-            (case_code, upc),
+            "SELECT qty FROM inventory WHERE case_code=? AND upc=? AND location=?",
+            (case_code, upc, location),
         ).fetchone()
         have = int(row["qty"]) if row else 0
         if have < need:
@@ -1015,7 +1104,7 @@ def _validate_have_qty(case_code: str, upc_map: Dict[str, int]) -> list[str]:
     return problems
 
 
-def case_type_totals(case_code: str) -> dict:
+def case_type_totals(case_code: str, location: Optional[str] = None) -> dict:
     """Compute live totals for a case, grouped by item_type."""
     db = get_db()
     pieces = []
@@ -1035,6 +1124,9 @@ def case_type_totals(case_code: str) -> dict:
         WHERE inv.case_code = ?
         """
     params.append(case_code)
+    if location in INVENTORY_LOCATIONS:
+        sql += " AND inv.location = ?"
+        params.append(location)
     row = db.execute(sql, params).fetchone()
     base = {c["count_key"]: 0 for c in ITEM_CATEGORIES}
     base.update({"total": 0, "unknown": 0})
@@ -1113,7 +1205,7 @@ def index():
         f"""
         SELECT c.case_code, c.case_name, c.is_virtual, c.is_active,
                COALESCE(SUM(i.qty), 0) AS total_qty,
-               COALESCE(COUNT(i.upc), 0) AS distinct_upcs
+               COALESCE(COUNT(DISTINCT i.upc), 0) AS distinct_upcs
         FROM cases c
         LEFT JOIN inventory i ON i.case_code = c.case_code
         WHERE c.is_active = 1
@@ -1175,23 +1267,58 @@ def view_case(case_code: str):
         flash("Case not found.", "danger")
         return redirect(url_for("index"))
 
-    items = db.execute(
+    case_items = db.execute(
         """
         SELECT inv.upc, inv.qty, p.description, p.item_type
         FROM inventory inv
         LEFT JOIN products p ON p.upc = inv.upc
-        WHERE inv.case_code = ?
+        WHERE inv.case_code = ? AND inv.location = ?
         ORDER BY inv.upc
         """,
-        (case_code,),
+        (case_code, LOCATION_CASE),
+    ).fetchall()
+
+    reserve_items = db.execute(
+        """
+        SELECT inv.upc, inv.qty, p.description, p.item_type
+        FROM inventory inv
+        LEFT JOIN products p ON p.upc = inv.upc
+        WHERE inv.case_code = ? AND inv.location = ?
+        ORDER BY inv.upc
+        """,
+        (case_code, LOCATION_RESERVE),
     ).fetchall()
 
     totals = db.execute(
-        "SELECT COALESCE(SUM(qty),0) AS total_qty, COALESCE(COUNT(upc),0) AS distinct_upcs FROM inventory WHERE case_code=?",
+        """
+        SELECT COALESCE(SUM(qty),0) AS total_qty, COALESCE(COUNT(DISTINCT upc),0) AS distinct_upcs
+        FROM inventory
+        WHERE case_code=?
+        """,
         (case_code,),
     ).fetchone()
 
-    type_totals = case_type_totals(case_code)
+    case_totals = db.execute(
+        """
+        SELECT COALESCE(SUM(qty),0) AS total_qty, COALESCE(COUNT(DISTINCT upc),0) AS distinct_upcs
+        FROM inventory
+        WHERE case_code=? AND location=?
+        """,
+        (case_code, LOCATION_CASE),
+    ).fetchone()
+
+    reserve_totals = db.execute(
+        """
+        SELECT COALESCE(SUM(qty),0) AS total_qty, COALESCE(COUNT(DISTINCT upc),0) AS distinct_upcs
+        FROM inventory
+        WHERE case_code=? AND location=?
+        """,
+        (case_code, LOCATION_RESERVE),
+    ).fetchone()
+
+    case_type_totals_data = case_type_totals(case_code, LOCATION_CASE)
+    reserve_type_totals = case_type_totals(case_code, LOCATION_RESERVE)
+    combined_type_totals = case_type_totals(case_code)
 
     # Latest physical count for today (store-local)
     today = local_date_str()
@@ -1231,9 +1358,14 @@ def view_case(case_code: str):
     return render_template(
         "case.html",
         case=case,
-        items=items,
+        items=case_items,
+        reserve_items=reserve_items,
         totals=totals,
-        type_totals=type_totals,
+        case_totals=case_totals,
+        reserve_totals=reserve_totals,
+        case_type_totals=case_type_totals_data,
+        reserve_type_totals=reserve_type_totals,
+        combined_type_totals=combined_type_totals,
         last_count=last_count,
         history=history_rows,
         active_cases=active_cases,
@@ -1250,16 +1382,20 @@ def api_case_items(case_code: str):
     if not ensure_case_exists(case_code):
         return jsonify({"ok": False, "error": "Case not found"}), 404
 
+    location = (request.args.get("location") or "").strip().upper()
+    if location not in INVENTORY_LOCATIONS:
+        location = LOCATION_CASE
+
     db = get_db()
     rows = db.execute(
         """
         SELECT inv.upc, inv.qty, p.description, p.item_type
         FROM inventory inv
         LEFT JOIN products p ON p.upc = inv.upc
-        WHERE inv.case_code = ?
+        WHERE inv.case_code = ? AND inv.location = ?
         ORDER BY inv.upc
         """,
-        (case_code,),
+        (case_code, location),
     ).fetchall()
 
     items = [
@@ -1271,7 +1407,7 @@ def api_case_items(case_code: str):
         }
         for r in rows
     ]
-    return jsonify({"ok": True, "case_code": case_code, "items": items})
+    return jsonify({"ok": True, "case_code": case_code, "location": location, "items": items})
 
 
 @app.get("/cases/<case_code>/edit")
@@ -1365,7 +1501,7 @@ def move_out_of_case(case_code: str):
         flash("Scan/enter at least one UPC to move.", "danger")
         return redirect(url_for("view_case", case_code=case_code))
 
-    problems = _validate_have_qty(case_code, upc_map)
+    problems = _validate_have_qty(case_code, upc_map, LOCATION_CASE)
     if problems:
         flash("Not enough qty to move for: " + "; ".join(problems), "danger")
         return redirect(url_for("view_case", case_code=case_code))
@@ -1373,14 +1509,59 @@ def move_out_of_case(case_code: str):
     db = get_db()
     for upc, qty in upc_map.items():
         upsert_product(upc, description, item_type=None)
-        ok, _ = remove_qty(case_code, upc, qty)
+        ok, _ = remove_qty(case_code, upc, qty, LOCATION_CASE)
         if ok:
-            add_qty(to_case, upc, qty)
+            add_qty(to_case, upc, qty, LOCATION_CASE)
             log_history(ACTION_MOVE, upc=upc, qty=qty, from_case_code=case_code, to_case_code=to_case, notes="Moved from case workbench")
     db.commit()
 
     flash(f"Moved {sum(upc_map.values())} unit(s) from {case_code} → {to_case}.", "success")
     return redirect(url_for("view_case", case_code=to_case))
+
+
+@app.post("/cases/<case_code>/transfer_location")
+@login_required
+def transfer_case_location(case_code: str):
+    case_code = (case_code or "").strip()
+    from_location = (request.form.get("from_location") or "").strip().upper()
+    to_location = (request.form.get("to_location") or "").strip().upper()
+    upc_map = parse_upc_lines(request.form.get("upcs", ""))
+
+    if not ensure_case_exists(case_code):
+        flash("Case not found.", "danger")
+        return redirect(url_for("index"))
+    if from_location not in INVENTORY_LOCATIONS or to_location not in INVENTORY_LOCATIONS:
+        flash("Choose Case or Reserve for the move.", "danger")
+        return redirect(url_for("view_case", case_code=case_code))
+    if from_location == to_location:
+        flash("From and To locations can’t be the same.", "danger")
+        return redirect(url_for("view_case", case_code=case_code))
+    if not upc_map:
+        flash("Scan/enter at least one UPC to move.", "danger")
+        return redirect(url_for("view_case", case_code=case_code))
+
+    problems = _validate_have_qty(case_code, upc_map, from_location)
+    if problems:
+        flash("Not enough qty to move for: " + "; ".join(problems), "danger")
+        return redirect(url_for("view_case", case_code=case_code))
+
+    db = get_db()
+    for upc, qty in upc_map.items():
+        ok, _ = remove_qty(case_code, upc, qty, from_location)
+        if ok:
+            add_qty(case_code, upc, qty, to_location)
+            log_history(
+                ACTION_MOVE,
+                upc=upc,
+                qty=qty,
+                from_case_code=case_code,
+                to_case_code=case_code,
+                notes=f"Moved {from_location} → {to_location} (case workbench)",
+            )
+    db.commit()
+
+    flash(f"Moved {sum(upc_map.values())} unit(s) {from_location} → {to_location} for case {case_code}.", "success")
+    return redirect(url_for("view_case", case_code=case_code))
 
 
 def parse_sold_fields(form: dict) -> Tuple[Optional[dict], Optional[str]]:
@@ -1425,14 +1606,14 @@ def sell_from_case(case_code: str):
         flash(error, "danger")
         return redirect(url_for("view_case", case_code=case_code))
 
-    problems = _validate_have_qty(case_code, upc_map)
+    problems = _validate_have_qty(case_code, upc_map, LOCATION_CASE)
     if problems:
         flash("Not enough qty to sell for: " + "; ".join(problems), "danger")
         return redirect(url_for("view_case", case_code=case_code))
 
     db = get_db()
     for upc, qty in upc_map.items():
-        ok, _ = remove_qty(case_code, upc, qty)
+        ok, _ = remove_qty(case_code, upc, qty, LOCATION_CASE)
         if ok:
             log_history(
                 ACTION_SOLD,
@@ -1466,14 +1647,14 @@ def missing_from_case(case_code: str):
         flash("Scan/enter at least one UPC to mark missing.", "danger")
         return redirect(url_for("view_case", case_code=case_code))
 
-    problems = _validate_have_qty(case_code, upc_map)
+    problems = _validate_have_qty(case_code, upc_map, LOCATION_CASE)
     if problems:
         flash("Not enough qty to mark missing for: " + "; ".join(problems), "danger")
         return redirect(url_for("view_case", case_code=case_code))
 
     db = get_db()
     for upc, qty in upc_map.items():
-        ok, _ = remove_qty(case_code, upc, qty)
+        ok, _ = remove_qty(case_code, upc, qty, LOCATION_CASE)
         if ok:
             log_history(ACTION_MISSING, upc=upc, qty=qty, from_case_code=case_code, notes=notes or "Marked missing from case workbench")
     db.commit()
@@ -1502,7 +1683,7 @@ def receive():
         db = get_db()
         for upc, qty in upc_map.items():
             upsert_product(upc, description, item_type=item_type)
-            add_qty(NEW_RECEIPTS_CODE, upc, qty)
+            add_qty(NEW_RECEIPTS_CODE, upc, qty, LOCATION_CASE)
             log_history(ACTION_RECEIVE, upc=upc, qty=qty, to_case_code=NEW_RECEIPTS_CODE, notes=f"Received into New Receipts ({item_type})")
         db.commit()
 
@@ -1544,16 +1725,16 @@ def move():
             flash("From/To case not found.", "danger")
             return redirect(url_for("move"))
 
-        problems = _validate_have_qty(from_case, upc_map)
+        problems = _validate_have_qty(from_case, upc_map, LOCATION_CASE)
         if problems:
             flash("Not enough quantity to move for: " + "; ".join(problems), "danger")
             return redirect(url_for("move"))
 
         for upc, qty in upc_map.items():
             upsert_product(upc, description, item_type=None)
-            ok, _ = remove_qty(from_case, upc, qty)
+            ok, _ = remove_qty(from_case, upc, qty, LOCATION_CASE)
             if ok:
-                add_qty(to_case, upc, qty)
+                add_qty(to_case, upc, qty, LOCATION_CASE)
                 log_history(ACTION_MOVE, upc=upc, qty=qty, from_case_code=from_case, to_case_code=to_case, notes="Moved qty (bulk move page)")
         db.commit()
 
@@ -1598,7 +1779,7 @@ def sell():
             flash(error, "danger")
             return redirect(url_for("sell"))
 
-        ok, have = remove_qty(case_code, upc, qty)
+        ok, have = remove_qty(case_code, upc, qty, LOCATION_CASE)
         if not ok:
             flash(f"Not enough qty in case {case_code}. Requested {qty}, have {have}.", "danger")
             return redirect(url_for("sell"))
@@ -1652,7 +1833,7 @@ def missing():
             flash("Please choose a valid case.", "danger")
             return redirect(url_for("missing"))
 
-        ok, have = remove_qty(case_code, upc, qty)
+        ok, have = remove_qty(case_code, upc, qty, LOCATION_CASE)
         if not ok:
             flash(f"Not enough qty in case {case_code}. Requested {qty}, have {have}.", "danger")
             return redirect(url_for("missing"))
@@ -1751,6 +1932,7 @@ def export_inventory():
         SELECT
           i.case_code,
           c.case_name,
+          i.location,
           i.upc,
           COALESCE(p.item_type,'') AS item_type,
           COALESCE(p.description,'') AS description,
@@ -1759,16 +1941,16 @@ def export_inventory():
         JOIN cases c ON c.case_code = i.case_code
         LEFT JOIN products p ON p.upc = i.upc
         WHERE c.is_active = 1 AND i.qty > 0
-        ORDER BY i.case_code, i.upc
+        ORDER BY i.case_code, i.location, i.upc
         """
     ).fetchall()
 
     import io, csv
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["case_code","case_name","upc","item_type","description","qty"])
+    w.writerow(["case_code","case_name","location","upc","item_type","description","qty"])
     for r in rows:
-        w.writerow([r["case_code"], r["case_name"], r["upc"], r["item_type"], r["description"], int(r["qty"])])
+        w.writerow([r["case_code"], r["case_name"], r["location"], r["upc"], r["item_type"], r["description"], int(r["qty"])])
 
     data = buf.getvalue().encode("utf-8")
     filename = f"inventory_{now_local_dt().strftime('%m-%d-%Y_%H%M')}.csv"
@@ -1792,13 +1974,14 @@ def export_case(case_code):
     rows = db.execute(
         """
         SELECT i.upc,
+               i.location,
                COALESCE(p.item_type,'') AS item_type,
                COALESCE(p.description,'') AS description,
                i.qty
         FROM inventory i
         LEFT JOIN products p ON p.upc = i.upc
         WHERE i.case_code = ? AND i.qty > 0
-        ORDER BY i.upc
+        ORDER BY i.location, i.upc
         """,
         (case_code,),
     ).fetchall()
@@ -1806,9 +1989,9 @@ def export_case(case_code):
     import io, csv
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["case_code","case_name","upc","item_type","description","qty"])
+    w.writerow(["case_code","case_name","location","upc","item_type","description","qty"])
     for r in rows:
-        w.writerow([c["case_code"], c["case_name"], r["upc"], r["item_type"], r["description"], int(r["qty"])])
+        w.writerow([c["case_code"], c["case_name"], r["location"], r["upc"], r["item_type"], r["description"], int(r["qty"])])
 
     data = buf.getvalue().encode("utf-8")
     filename = f"case_{case_code}_{now_local_dt().strftime('%m-%d-%Y_%H%M')}.csv"
@@ -1845,11 +2028,31 @@ def export_history():
 
         output = io.StringIO()
         w = csv.writer(output)
-        w.writerow(["ts_utc","local_date","case_code","username","bracelets","rings","earrings","necklaces","other","total","notes"])
+        w.writerow([
+            "ts_utc",
+            "local_date",
+            "case_code",
+            "username",
+            "bracelets",
+            "rings",
+            "earrings",
+            "necklaces",
+            "other",
+            "reserve_bracelets",
+            "reserve_rings",
+            "reserve_earrings",
+            "reserve_necklaces",
+            "reserve_other",
+            "total",
+            "notes",
+        ])
         for r in rows:
             w.writerow([
                 r["ts_utc"], r["local_date"], r["case_code"], r["username"] or "",
-                r["bracelets"], r["rings"], r["earrings"], r["necklaces"], r["other"], r["total"],
+                r["bracelets"], r["rings"], r["earrings"], r["necklaces"], r["other"],
+                r["reserve_bracelets"], r["reserve_rings"], r["reserve_earrings"],
+                r["reserve_necklaces"], r["reserve_other"],
+                r["total"],
                 r["notes"] or ""
             ])
         return Response(
