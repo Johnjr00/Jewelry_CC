@@ -779,10 +779,15 @@ def build_daily_count_workbook(case_code: str, local_date: str):
 
         total = int(count["total"])
         ws.cell(start_row + 8, 12).value = total
+        ws.cell(start_row + 5, 16).value = total
 
         initials = _initials_from_username(count["username"] or "")
         if initials:
             ws.cell(start_row + 8, 10).value = initials
+            ws.cell(start_row + 8, 16).value = initials
+
+        ws.cell(start_row + 6, 16).value = net
+        ws.cell(start_row + 7, 16).value = total - net
 
         notes = (count["notes"] or "").strip()
         if notes:

@@ -20,6 +20,16 @@
         {% endfor %}
         <a class="chip text-decoration-none" href="{{ url_for('export_case', case_code=case.case_code) }}">Export Case CSV</a>
       </div>
+      <div class="d-flex gap-2 flex-wrap mt-2">
+        {% for cat in count_categories %}
+          <span class="chip">Case {{ cat.plural }}: <strong class="text-white">{{ case_type_totals[cat.count_key] }}</strong></span>
+        {% endfor %}
+      </div>
+      <div class="d-flex gap-2 flex-wrap mt-2">
+        {% for cat in count_categories %}
+          <span class="chip">Reserve {{ cat.plural }}: <strong class="text-white">{{ reserve_type_totals[cat.count_key] }}</strong></span>
+        {% endfor %}
+      </div>
       {% if combined_type_totals.unknown and combined_type_totals.unknown > 0 %}
         <div class="mt-2"><span class="chip">Unknown type: <strong class="text-white">{{ combined_type_totals.unknown }}</strong></span></div>
       {% endif %}
