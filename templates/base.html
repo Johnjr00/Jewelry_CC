@@ -267,14 +267,28 @@
         }
       };
 
+      const normalizeBarcodeValue = (value) => {
+        if (!value) return value;
+        const trimmed = value.trim();
+        const digitsOnly = trimmed.replace(/\D/g, "");
+        if (!digitsOnly) return trimmed;
+        if (digitsOnly.length === 13 && digitsOnly.startsWith("0")) {
+          return digitsOnly.slice(1);
+        }
+        return digitsOnly.length >= 12 ? digitsOnly : trimmed;
+      };
+
       const appendValue = (value) => {
         if (!activeInput) return;
+        const normalized = normalizeBarcodeValue(value);
         if (activeInput.tagName === "TEXTAREA") {
           const current = activeInput.value || "";
-          const next = current.trim() ? `${current.replace(/\s*$/, "")}\n${value}` : value;
+          const next = current.trim()
+            ? `${current.replace(/\s*$/, "")}\n${normalized}`
+            : normalized;
           activeInput.value = next;
         } else {
-          activeInput.value = value;
+          activeInput.value = normalized;
         }
         activeInput.dispatchEvent(new Event("input", { bubbles: true }));
         activeInput.focus();
@@ -345,10 +359,35 @@
           ZXing.BarcodeFormat.EAN_13,
           ZXing.BarcodeFormat.EAN_8,
         ]);
+        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
         const reader = new ZXing.BrowserMultiFormatReader(hints, 200);
         try {
           const result = await reader.decodeFromImageElement(img);
-          return result ? [{ rawValue: result.text }] : [];
+          if (result && result.text) {
+            return [{ rawValue: result.text }];
+          }
+          const sizes = [1600, 1200, 900, 600];
+          for (const maxSize of sizes) {
+            const canvas = document.createElement("canvas");
+            const width = img.naturalWidth || img.width;
+            const height = img.naturalHeight || img.height;
+            if (!width || !height) continue;
+            const scale = Math.min(1, maxSize / Math.max(width, height));
+            canvas.width = Math.round(width * scale);
+            canvas.height = Math.round(height * scale);
+            const ctx = canvas.getContext("2d");
+            if (!ctx) continue;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            try {
+              const scaledResult = await reader.decodeFromCanvas(canvas);
+              if (scaledResult && scaledResult.text) {
+                return [{ rawValue: scaledResult.text }];
+              }
+            } catch (decodeError) {
+              continue;
+            }
+          }
+          return [];
         } catch (error) {
           return [];
         } finally {
@@ -396,8 +435,9 @@
           .detect(videoEl)
           .then((barcodes) => {
             if (barcodes && barcodes.length) {
-              appendValue(barcodes[0].rawValue);
-              statusEl.textContent = `Captured ${barcodes[0].rawValue}`;
+              const rawValue = barcodes[0].rawValue;
+              appendValue(rawValue);
+              statusEl.textContent = `Captured ${normalizeBarcodeValue(rawValue)}`;
               scanning = false;
               modal.hide();
             }
@@ -464,8 +504,9 @@
             barcodes = await decodeWithZxing(file);
           }
           if (barcodes && barcodes.length) {
-            appendValue(barcodes[0].rawValue);
-            statusEl.textContent = `Captured ${barcodes[0].rawValue}`;
+            const rawValue = barcodes[0].rawValue;
+            appendValue(rawValue);
+            statusEl.textContent = `Captured ${normalizeBarcodeValue(rawValue)}`;
             modal.hide();
           } else {
             statusEl.textContent = "No barcode detected in the photo. Try again.";
