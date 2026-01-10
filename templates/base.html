@@ -282,8 +282,6 @@
 
       const ensureDetector = () => {
         if (!("BarcodeDetector" in window)) {
-          statusEl.textContent = "Barcode scanning is not supported on this browser.";
-          supportEl.classList.remove("d-none");
           return null;
         }
         if (!detector) {
@@ -312,6 +310,53 @@
           };
           img.src = url;
         });
+
+      const loadZxing = (() => {
+        let promise = null;
+        return () => {
+          if (window.ZXing) {
+            return Promise.resolve(window.ZXing);
+          }
+          if (promise) {
+            return promise;
+          }
+          promise = new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = "https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js";
+            script.async = true;
+            script.onload = () => resolve(window.ZXing);
+            script.onerror = () => reject(new Error("ZXing load failed."));
+            document.head.appendChild(script);
+          });
+          return promise;
+        };
+      })();
+
+      const decodeWithZxing = async (file) => {
+        const ZXing = await loadZxing();
+        if (!ZXing) {
+          return [];
+        }
+        const img = await loadImageElement(file);
+        const hints = new Map();
+        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+          ZXing.BarcodeFormat.UPC_A,
+          ZXing.BarcodeFormat.UPC_E,
+          ZXing.BarcodeFormat.EAN_13,
+          ZXing.BarcodeFormat.EAN_8,
+        ]);
+        const reader = new ZXing.BrowserMultiFormatReader(hints, 200);
+        try {
+          const result = await reader.decodeFromImageElement(img);
+          return result ? [{ rawValue: result.text }] : [];
+        } catch (error) {
+          return [];
+        } finally {
+          if (reader && typeof reader.reset === "function") {
+            reader.reset();
+          }
+        }
+      };
 
       const detectFromFile = async (file, activeDetector) => {
         let source = null;
@@ -385,6 +430,9 @@
         }
         if (!ensureDetector()) {
           stopStream();
+          statusEl.textContent = "Live scanning is unavailable. Use photo capture instead.";
+          captureEl.classList.remove("d-none");
+          supportEl.classList.remove("d-none");
           return;
         }
         scanning = true;
@@ -401,22 +449,26 @@
         const file = event.target.files && event.target.files[0];
         if (!file) return;
         statusEl.textContent = "Scanning photo…";
-        const activeDetector = ensureDetector();
-        if (!activeDetector) {
-          statusEl.textContent = "Barcode scanning is not supported on this browser.";
-          return;
-        }
         try {
-          const barcodes = await detectFromFile(file, activeDetector);
+          const activeDetector = ensureDetector();
+          let barcodes = [];
+          if (activeDetector) {
+            barcodes = await detectFromFile(file, activeDetector);
+          }
+          if (!barcodes || !barcodes.length) {
+            barcodes = await decodeWithZxing(file);
+          }
           if (barcodes && barcodes.length) {
             appendValue(barcodes[0].rawValue);
             statusEl.textContent = `Captured ${barcodes[0].rawValue}`;
             modal.hide();
           } else {
             statusEl.textContent = "No barcode detected in the photo. Try again.";
+            supportEl.classList.remove("d-none");
           }
         } catch (error) {
           statusEl.textContent = "Could not read the photo. Try again.";
+          supportEl.classList.remove("d-none");
         }
       });
 
