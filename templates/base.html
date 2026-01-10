@@ -325,79 +325,32 @@
           img.src = url;
         });
 
-      const loadZxing = (() => {
+      const loadQuagga = (() => {
         let promise = null;
         return () => {
-          if (window.ZXing) {
-            return Promise.resolve(window.ZXing);
+          if (window.Quagga) {
+            return Promise.resolve(window.Quagga);
           }
           if (promise) {
             return promise;
           }
           promise = new Promise((resolve, reject) => {
             const script = document.createElement("script");
-            script.src = "https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js";
+            script.src = "https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.2.6/dist/quagga.min.js";
             script.async = true;
-            script.onload = () => resolve(window.ZXing);
-            script.onerror = () => reject(new Error("ZXing load failed."));
+            script.onload = () => resolve(window.Quagga);
+            script.onerror = () => reject(new Error("Quagga load failed."));
             document.head.appendChild(script);
           });
           return promise;
         };
       })();
 
-      const decodeWithZxing = async (file) => {
-        const ZXing = await loadZxing();
-        if (!ZXing) {
+      const decodeWithQuagga = async (file) => {
+        const Quagga = await loadQuagga();
+        if (!Quagga) {
           return [];
         }
-        const img = await loadImageElement(file);
-        const hints = new Map();
-        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-          ZXing.BarcodeFormat.UPC_A,
-          ZXing.BarcodeFormat.UPC_E,
-          ZXing.BarcodeFormat.EAN_13,
-          ZXing.BarcodeFormat.EAN_8,
-        ]);
-        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-        const reader = new ZXing.BrowserMultiFormatReader(hints, 200);
-        try {
-          const result = await reader.decodeFromImageElement(img);
-          if (result && result.text) {
-            return [{ rawValue: result.text }];
-          }
-          const sizes = [1600, 1200, 900, 600];
-          for (const maxSize of sizes) {
-            const canvas = document.createElement("canvas");
-            const width = img.naturalWidth || img.width;
-            const height = img.naturalHeight || img.height;
-            if (!width || !height) continue;
-            const scale = Math.min(1, maxSize / Math.max(width, height));
-            canvas.width = Math.round(width * scale);
-            canvas.height = Math.round(height * scale);
-            const ctx = canvas.getContext("2d");
-            if (!ctx) continue;
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            try {
-              const scaledResult = await reader.decodeFromCanvas(canvas);
-              if (scaledResult && scaledResult.text) {
-                return [{ rawValue: scaledResult.text }];
-              }
-            } catch (decodeError) {
-              continue;
-            }
-          }
-          return [];
-        } catch (error) {
-          return [];
-        } finally {
-          if (reader && typeof reader.reset === "function") {
-            reader.reset();
-          }
-        }
-      };
-
-      const detectFromFile = async (file, activeDetector) => {
         let source = null;
         if ("createImageBitmap" in window) {
           try {
@@ -429,29 +382,30 @@
           return canvas;
         };
 
-        let barcodes = await activeDetector.detect(source);
-        if (barcodes && barcodes.length) {
-          return barcodes;
-        }
-
-        const scanSizes = [2200, 1600, 1200, 900, 600];
+        const scanSizes = [2200, 1800, 1600, 1200, 900, 600];
         for (const maxSize of scanSizes) {
           const canvas = toCanvas(source, maxSize);
           if (!canvas) continue;
-          barcodes = await activeDetector.detect(canvas);
-          if (barcodes && barcodes.length) {
-            return barcodes;
-          }
-          const ctx = canvas.getContext("2d");
-          if (!ctx) continue;
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          barcodes = await activeDetector.detect(imageData);
-          if (barcodes && barcodes.length) {
-            return barcodes;
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+          const result = await new Promise((resolve) => {
+            Quagga.decodeSingle(
+              {
+                src: dataUrl,
+                numOfWorkers: 0,
+                locate: true,
+                inputStream: { size: Math.max(canvas.width, canvas.height) },
+                decoder: {
+                  readers: ["upc_reader", "upc_e_reader", "ean_reader", "ean_8_reader"],
+                },
+              },
+              (decoded) => resolve(decoded)
+            );
+          });
+          if (result && result.codeResult && result.codeResult.code) {
+            return [{ rawValue: result.codeResult.code }];
           }
         }
-
-        return barcodes;
+        return [];
       };
 
       const scanLoop = () => {
@@ -520,14 +474,7 @@
         if (!file) return;
         statusEl.textContent = "Scanning photo…";
         try {
-          const activeDetector = ensureDetector();
-          let barcodes = [];
-          if (activeDetector) {
-            barcodes = await detectFromFile(file, activeDetector);
-          }
-          if (!barcodes || !barcodes.length) {
-            barcodes = await decodeWithZxing(file);
-          }
+          const barcodes = await decodeWithQuagga(file);
           if (barcodes && barcodes.length) {
             const rawValue = barcodes[0].rawValue;
             appendValue(rawValue);
