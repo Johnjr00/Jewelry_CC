@@ -371,10 +371,15 @@
           source = await loadImageElement(file);
         }
         let barcodes = await activeDetector.detect(source);
-        if ((!barcodes || !barcodes.length) && source instanceof HTMLImageElement) {
+        if (!barcodes || !barcodes.length) {
           const canvas = document.createElement("canvas");
-          canvas.width = source.naturalWidth || source.width;
-          canvas.height = source.naturalHeight || source.height;
+          const width = source.naturalWidth || source.width || source.displayWidth;
+          const height = source.naturalHeight || source.height || source.displayHeight;
+          if (!width || !height) {
+            return barcodes;
+          }
+          canvas.width = width;
+          canvas.height = height;
           const ctx = canvas.getContext("2d");
           if (ctx) {
             ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
