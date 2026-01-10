@@ -401,7 +401,7 @@
         let source = null;
         if ("createImageBitmap" in window) {
           try {
-            source = await createImageBitmap(file);
+            source = await createImageBitmap(file, { imageOrientation: "from-image" });
           } catch (error) {
             source = null;
           }
@@ -409,23 +409,48 @@
         if (!source) {
           source = await loadImageElement(file);
         }
-        let barcodes = await activeDetector.detect(source);
-        if (!barcodes || !barcodes.length) {
+
+        const getSize = (imgSource) => {
+          const width = imgSource.naturalWidth || imgSource.width || imgSource.displayWidth;
+          const height = imgSource.naturalHeight || imgSource.height || imgSource.displayHeight;
+          return { width, height };
+        };
+
+        const toCanvas = (imgSource, maxSize) => {
+          const { width, height } = getSize(imgSource);
+          if (!width || !height) return null;
+          const scale = maxSize ? Math.min(1, maxSize / Math.max(width, height)) : 1;
           const canvas = document.createElement("canvas");
-          const width = source.naturalWidth || source.width || source.displayWidth;
-          const height = source.naturalHeight || source.height || source.displayHeight;
-          if (!width || !height) {
+          canvas.width = Math.round(width * scale);
+          canvas.height = Math.round(height * scale);
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return null;
+          ctx.drawImage(imgSource, 0, 0, canvas.width, canvas.height);
+          return canvas;
+        };
+
+        let barcodes = await activeDetector.detect(source);
+        if (barcodes && barcodes.length) {
+          return barcodes;
+        }
+
+        const scanSizes = [2200, 1600, 1200, 900, 600];
+        for (const maxSize of scanSizes) {
+          const canvas = toCanvas(source, maxSize);
+          if (!canvas) continue;
+          barcodes = await activeDetector.detect(canvas);
+          if (barcodes && barcodes.length) {
             return barcodes;
           }
-          canvas.width = width;
-          canvas.height = height;
           const ctx = canvas.getContext("2d");
-          if (ctx) {
-            ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            barcodes = await activeDetector.detect(imageData);
+          if (!ctx) continue;
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          barcodes = await activeDetector.detect(imageData);
+          if (barcodes && barcodes.length) {
+            return barcodes;
           }
         }
+
         return barcodes;
       };
 
