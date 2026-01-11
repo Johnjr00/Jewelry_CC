@@ -341,10 +341,52 @@
             script.onload = () => resolve(window.Quagga);
             script.onerror = () => reject(new Error("Quagga load failed."));
             document.head.appendChild(script);
+            setTimeout(() => reject(new Error("Quagga load timed out.")), 8000);
           });
           return promise;
         };
       })();
+
+      const decodeWithDetector = async (file) => {
+        const detectorInstance = ensureDetector();
+        if (!detectorInstance) return [];
+        let source = null;
+        if ("createImageBitmap" in window) {
+          try {
+            source = await createImageBitmap(file, { imageOrientation: "from-image" });
+          } catch (error) {
+            source = null;
+          }
+        }
+        if (!source) {
+          source = await loadImageElement(file);
+        }
+        const width = source.naturalWidth || source.width || source.displayWidth;
+        const height = source.naturalHeight || source.height || source.displayHeight;
+        if (!width || !height) return [];
+        const maxOutput = 3500;
+        const maxDim = Math.max(width, height);
+        const scales = [1, 1.5, 2, 2.5];
+        for (const scaleUp of scales) {
+          let scale = Math.min(1, maxOutput / maxDim);
+          scale *= scaleUp;
+          if (maxDim * scale > maxOutput) {
+            scale = maxOutput / maxDim;
+          }
+          if (!Number.isFinite(scale) || scale <= 0) continue;
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(width * scale);
+          canvas.height = Math.round(height * scale);
+          const ctx = canvas.getContext("2d");
+          if (!ctx) continue;
+          ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+          const barcodes = await detectorInstance.detect(canvas);
+          if (barcodes && barcodes.length) {
+            return barcodes;
+          }
+        }
+        return [];
+      };
 
       const decodeWithQuagga = async (file) => {
         const Quagga = await loadQuagga();
@@ -390,33 +432,37 @@
         };
 
         const scanAttempts = [
-          { maxSize: 2600, scaleUp: 1, locator: { patchSize: "small", halfSample: false } },
-          { maxSize: 2200, scaleUp: 1, locator: { patchSize: "medium", halfSample: false } },
-          { maxSize: 1800, scaleUp: 1, locator: { patchSize: "large", halfSample: false } },
-          { maxSize: 1400, scaleUp: 1, locator: { patchSize: "medium", halfSample: true } },
-          { maxSize: 1000, scaleUp: 1, locator: { patchSize: "large", halfSample: true } },
-          { maxSize: 1200, scaleUp: 1.5, locator: { patchSize: "small", halfSample: false } },
-          { maxSize: 900, scaleUp: 2, locator: { patchSize: "small", halfSample: false } },
+          { maxSize: 3200, scaleUp: 1, locator: { patchSize: "small", halfSample: false } },
+          { maxSize: 2600, scaleUp: 1, locator: { patchSize: "medium", halfSample: false } },
+          { maxSize: 2200, scaleUp: 1, locator: { patchSize: "large", halfSample: false } },
+          { maxSize: 1800, scaleUp: 1, locator: { patchSize: "medium", halfSample: true } },
+          { maxSize: 1400, scaleUp: 1, locator: { patchSize: "large", halfSample: true } },
+          { maxSize: 1600, scaleUp: 1.5, locator: { patchSize: "small", halfSample: false } },
+          { maxSize: 1200, scaleUp: 2, locator: { patchSize: "small", halfSample: false } },
+          { maxSize: 900, scaleUp: 2.5, locator: { patchSize: "small", halfSample: false } },
         ];
         for (const attempt of scanAttempts) {
           const canvas = toCanvas(source, attempt.maxSize, attempt.scaleUp);
           if (!canvas) continue;
           const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
-          const result = await new Promise((resolve) => {
-            Quagga.decodeSingle(
-              {
-                src: dataUrl,
-                numOfWorkers: 0,
-                locate: true,
-                inputStream: { size: Math.max(canvas.width, canvas.height) },
-                locator: attempt.locator,
-                decoder: {
-                  readers: ["upc_reader", "upc_e_reader", "ean_reader", "ean_8_reader"],
+          const result = await Promise.race([
+            new Promise((resolve) => {
+              Quagga.decodeSingle(
+                {
+                  src: dataUrl,
+                  numOfWorkers: 0,
+                  locate: true,
+                  inputStream: { size: Math.max(canvas.width, canvas.height) },
+                  locator: attempt.locator,
+                  decoder: {
+                    readers: ["upc_reader", "upc_e_reader", "ean_reader", "ean_8_reader"],
+                  },
                 },
-              },
-              (decoded) => resolve(decoded)
-            );
-          });
+                (decoded) => resolve(decoded)
+              );
+            }),
+            new Promise((resolve) => setTimeout(() => resolve(null), 6000)),
+          ]);
           if (result && result.codeResult && result.codeResult.code) {
             return [{ rawValue: result.codeResult.code }];
           }
@@ -490,7 +536,10 @@
         if (!file) return;
         statusEl.textContent = "Scanning photo…";
         try {
-          const barcodes = await decodeWithQuagga(file);
+          let barcodes = await decodeWithDetector(file);
+          if (!barcodes || !barcodes.length) {
+            barcodes = await decodeWithQuagga(file);
+          }
           if (barcodes && barcodes.length) {
             const rawValue = barcodes[0].rawValue;
             appendValue(rawValue);
