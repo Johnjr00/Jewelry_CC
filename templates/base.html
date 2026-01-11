@@ -369,10 +369,17 @@
           return { width, height };
         };
 
-        const toCanvas = (imgSource, maxSize) => {
+        const toCanvas = (imgSource, maxSize, scaleUp = 1) => {
           const { width, height } = getSize(imgSource);
           if (!width || !height) return null;
-          const scale = maxSize ? Math.min(1, maxSize / Math.max(width, height)) : 1;
+          const maxDim = Math.max(width, height);
+          const maxOutput = 3000;
+          let scale = maxSize ? Math.min(1, maxSize / maxDim) : 1;
+          scale *= scaleUp;
+          if (maxDim * scale > maxOutput) {
+            scale = maxOutput / maxDim;
+          }
+          if (!Number.isFinite(scale) || scale <= 0) return null;
           const canvas = document.createElement("canvas");
           canvas.width = Math.round(width * scale);
           canvas.height = Math.round(height * scale);
@@ -382,11 +389,19 @@
           return canvas;
         };
 
-        const scanSizes = [2200, 1800, 1600, 1200, 900, 600];
-        for (const maxSize of scanSizes) {
-          const canvas = toCanvas(source, maxSize);
+        const scanAttempts = [
+          { maxSize: 2600, scaleUp: 1, locator: { patchSize: "small", halfSample: false } },
+          { maxSize: 2200, scaleUp: 1, locator: { patchSize: "medium", halfSample: false } },
+          { maxSize: 1800, scaleUp: 1, locator: { patchSize: "large", halfSample: false } },
+          { maxSize: 1400, scaleUp: 1, locator: { patchSize: "medium", halfSample: true } },
+          { maxSize: 1000, scaleUp: 1, locator: { patchSize: "large", halfSample: true } },
+          { maxSize: 1200, scaleUp: 1.5, locator: { patchSize: "small", halfSample: false } },
+          { maxSize: 900, scaleUp: 2, locator: { patchSize: "small", halfSample: false } },
+        ];
+        for (const attempt of scanAttempts) {
+          const canvas = toCanvas(source, attempt.maxSize, attempt.scaleUp);
           if (!canvas) continue;
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
           const result = await new Promise((resolve) => {
             Quagga.decodeSingle(
               {
@@ -394,6 +409,7 @@
                 numOfWorkers: 0,
                 locate: true,
                 inputStream: { size: Math.max(canvas.width, canvas.height) },
+                locator: attempt.locator,
                 decoder: {
                   readers: ["upc_reader", "upc_e_reader", "ean_reader", "ean_8_reader"],
                 },
