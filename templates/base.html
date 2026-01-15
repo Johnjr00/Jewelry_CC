@@ -603,11 +603,26 @@
         }
         videoEl.classList.remove("d-none");
         try {
+          videoEl.setAttribute("playsinline", "");
+          videoEl.setAttribute("webkit-playsinline", "");
+          videoEl.playsInline = true;
+          videoEl.muted = true;
           activeStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: "environment" } },
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
             audio: false,
           });
           videoEl.srcObject = activeStream;
+          await new Promise((resolve) => {
+            if (videoEl.readyState >= 1) {
+              resolve();
+              return;
+            }
+            videoEl.onloadedmetadata = () => resolve();
+          });
           await videoEl.play();
         } catch (err) {
           showCaptureFallback("Camera access was blocked. Use photo capture instead.");
