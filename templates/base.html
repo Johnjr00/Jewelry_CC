@@ -681,8 +681,12 @@
           const target = document.getElementById(targetId);
           if (!target) return;
           activeInput = target;
+          const handleShown = () => {
+            modalEl.removeEventListener("shown.bs.modal", handleShown);
+            startScan();
+          };
+          modalEl.addEventListener("shown.bs.modal", handleShown);
           modal.show();
-          startScan();
         });
       });
     });
