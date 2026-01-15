@@ -210,7 +210,7 @@
         <div class="modal-body">
           <div class="ratio ratio-16x9 glass-soft overflow-hidden">
             <div id="upcScannerViewport" class="w-100 h-100 position-relative">
-              <video id="upcScannerVideo" class="w-100 h-100" autoplay muted playsinline></video>
+              <video id="upcScannerVideo" class="w-100 h-100" autoplay muted playsinline webkit-playsinline></video>
             </div>
           </div>
           <div class="text-white-50 mt-3" data-role="status"></div>
@@ -603,10 +603,13 @@
         }
         videoEl.classList.remove("d-none");
         try {
+          videoEl.setAttribute("autoplay", "");
+          videoEl.setAttribute("muted", "");
           videoEl.setAttribute("playsinline", "");
           videoEl.setAttribute("webkit-playsinline", "");
           videoEl.playsInline = true;
           videoEl.muted = true;
+          videoEl.autoplay = true;
           activeStream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: { ideal: "environment" },
