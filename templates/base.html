@@ -210,12 +210,11 @@
         <div class="modal-body">
           <div class="ratio ratio-16x9 glass-soft overflow-hidden">
             <div id="upcScannerViewport" class="w-100 h-100 position-relative">
-              <video id="upcScannerVideo" class="w-100 h-100" autoplay muted playsinline webkit-playsinline></video>
             </div>
           </div>
           <div class="text-white-50 mt-3" data-role="status"></div>
           <div class="text-white-50 mt-1 d-none" data-role="support">
-            Barcode scanning needs a browser with BarcodeDetector support (Safari 16+ recommended).
+            Camera access must be allowed in Safari for live scanning.
           </div>
           <div class="mt-3 d-none" data-role="capture">
             <button class="btn btn-outline-light" type="button" data-role="capture-btn">Capture Photo</button>
@@ -244,7 +243,6 @@
       if (!scanButtons.length) return;
 
       const modalEl = document.getElementById("upcScannerModal");
-      const videoEl = document.getElementById("upcScannerVideo");
       const statusEl = modalEl.querySelector("[data-role='status']");
       const supportEl = modalEl.querySelector("[data-role='support']");
       const captureEl = modalEl.querySelector("[data-role='capture']");
@@ -253,92 +251,9 @@
       const viewportEl = document.getElementById("upcScannerViewport");
       const modal = new bootstrap.Modal(modalEl);
       let activeInput = null;
-      let activeStream = null;
       let scanning = false;
-      let detector = null;
-      let rafId = null;
-      let scanCanvas = null;
-      let scanCtx = null;
       let quaggaActive = false;
       let quaggaHandler = null;
-
-      const formats = ["upc_a", "upc_e", "ean_13", "ean_8"];
-
-      const stopStream = () => {
-        if (activeStream) {
-          activeStream.getTracks().forEach((track) => track.stop());
-          activeStream = null;
-        }
-        if (videoEl) {
-          videoEl.srcObject = null;
-        }
-      };
-
-      const attachStreamToVideo = async (stream) => {
-        videoEl.setAttribute("autoplay", "true");
-        videoEl.setAttribute("muted", "true");
-        videoEl.setAttribute("playsinline", "true");
-        videoEl.setAttribute("webkit-playsinline", "true");
-        videoEl.playsInline = true;
-        videoEl.muted = true;
-        videoEl.autoplay = true;
-        videoEl.srcObject = stream;
-        await new Promise((resolve) => {
-          if (videoEl.readyState >= 1) {
-            resolve();
-            return;
-          }
-          videoEl.onloadedmetadata = () => resolve();
-        });
-        await videoEl.play();
-        await new Promise((resolve, reject) => {
-          const deadline = Date.now() + 1500;
-          const checkFrame = () => {
-            if (videoEl.videoWidth && videoEl.videoHeight) {
-              resolve();
-              return;
-            }
-            if (Date.now() > deadline) {
-              reject(new Error("No video frames available."));
-              return;
-            }
-            requestAnimationFrame(checkFrame);
-          };
-          checkFrame();
-        });
-      };
-
-      const startStreamWithFallbacks = async () => {
-        const attempts = [
-          {
-            video: {
-              facingMode: { ideal: "environment" },
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-            },
-            audio: false,
-          },
-          { video: { facingMode: "environment" }, audio: false },
-          { video: true, audio: false },
-        ];
-        let lastError = null;
-        for (const constraints of attempts) {
-          try {
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
-            try {
-              await attachStreamToVideo(stream);
-              activeStream = stream;
-              return;
-            } catch (error) {
-              stream.getTracks().forEach((track) => track.stop());
-              lastError = error;
-            }
-          } catch (error) {
-            lastError = error;
-          }
-        }
-        throw lastError || new Error("Unable to start camera.");
-      };
 
       const stopQuagga = async () => {
         if (!quaggaActive) return;
@@ -356,7 +271,7 @@
         quaggaActive = false;
         quaggaHandler = null;
         if (viewportEl) {
-          viewportEl.querySelectorAll("canvas").forEach((canvas) => canvas.remove());
+          viewportEl.querySelectorAll("video, canvas").forEach((el) => el.remove());
         }
       };
 
@@ -385,16 +300,6 @@
         }
         activeInput.dispatchEvent(new Event("input", { bubbles: true }));
         activeInput.focus();
-      };
-
-      const ensureDetector = () => {
-        if (!("BarcodeDetector" in window)) {
-          return null;
-        }
-        if (!detector) {
-          detector = new BarcodeDetector({ formats });
-        }
-        return detector;
       };
 
       const showCaptureFallback = (message) => {
@@ -439,47 +344,6 @@
           return promise;
         };
       })();
-
-      const decodeWithDetector = async (file) => {
-        const detectorInstance = ensureDetector();
-        if (!detectorInstance) return [];
-        let source = null;
-        if ("createImageBitmap" in window) {
-          try {
-            source = await createImageBitmap(file, { imageOrientation: "from-image" });
-          } catch (error) {
-            source = null;
-          }
-        }
-        if (!source) {
-          source = await loadImageElement(file);
-        }
-        const width = source.naturalWidth || source.width || source.displayWidth;
-        const height = source.naturalHeight || source.height || source.displayHeight;
-        if (!width || !height) return [];
-        const maxOutput = 3500;
-        const maxDim = Math.max(width, height);
-        const scales = [1, 1.5, 2, 2.5];
-        for (const scaleUp of scales) {
-          let scale = Math.min(1, maxOutput / maxDim);
-          scale *= scaleUp;
-          if (maxDim * scale > maxOutput) {
-            scale = maxOutput / maxDim;
-          }
-          if (!Number.isFinite(scale) || scale <= 0) continue;
-          const canvas = document.createElement("canvas");
-          canvas.width = Math.round(width * scale);
-          canvas.height = Math.round(height * scale);
-          const ctx = canvas.getContext("2d");
-          if (!ctx) continue;
-          ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-          const barcodes = await detectorInstance.detect(canvas);
-          if (barcodes && barcodes.length) {
-            return barcodes;
-          }
-        }
-        return [];
-      };
 
       const decodeWithQuagga = async (file) => {
         const Quagga = await loadQuagga();
@@ -563,49 +427,13 @@
         return [];
       };
 
-      const scanLoop = () => {
-        if (!scanning || !detector) return;
-        if (!scanCanvas) {
-          scanCanvas = document.createElement("canvas");
-          scanCtx = scanCanvas.getContext("2d");
-        }
-        if (!scanCtx) return;
-        const width = videoEl.videoWidth;
-        const height = videoEl.videoHeight;
-        if (!width || !height) {
-          rafId = requestAnimationFrame(scanLoop);
-          return;
-        }
-        if (scanCanvas.width !== width || scanCanvas.height !== height) {
-          scanCanvas.width = width;
-          scanCanvas.height = height;
-        }
-        scanCtx.drawImage(videoEl, 0, 0, width, height);
-        detector
-          .detect(scanCanvas)
-          .then((barcodes) => {
-            if (barcodes && barcodes.length) {
-              const rawValue = barcodes[0].rawValue;
-              appendValue(rawValue);
-              statusEl.textContent = `Captured ${normalizeBarcodeValue(rawValue)}`;
-              scanning = false;
-              modal.hide();
-            }
-          })
-          .catch(() => {})
-          .finally(() => {
-            if (scanning) {
-              rafId = requestAnimationFrame(scanLoop);
-            }
-          });
-      };
-
       const startQuaggaScan = async () => {
         statusEl.textContent = "Starting camera…";
         supportEl.classList.add("d-none");
         captureEl.classList.add("d-none");
-        videoEl.classList.add("d-none");
-        await stopStream();
+        if (viewportEl) {
+          viewportEl.innerHTML = "";
+        }
         const Quagga = await loadQuagga();
         if (!Quagga) {
           showCaptureFallback("Live scanning is unavailable. Use photo capture instead.");
@@ -639,6 +467,24 @@
                 resolve();
                 return;
               }
+              const previewVideo = viewportEl ? viewportEl.querySelector("video") : null;
+              const previewCanvas = viewportEl ? viewportEl.querySelector("canvas") : null;
+              if (previewVideo) {
+                previewVideo.setAttribute("autoplay", "true");
+                previewVideo.setAttribute("muted", "true");
+                previewVideo.setAttribute("playsinline", "true");
+                previewVideo.setAttribute("webkit-playsinline", "true");
+                previewVideo.autoplay = true;
+                previewVideo.muted = true;
+                previewVideo.playsInline = true;
+                previewVideo.style.width = "100%";
+                previewVideo.style.height = "100%";
+                previewVideo.style.objectFit = "cover";
+              }
+              if (previewCanvas) {
+                previewCanvas.style.width = "100%";
+                previewCanvas.style.height = "100%";
+              }
               quaggaActive = true;
               Quagga.onDetected(quaggaHandler);
               Quagga.start();
@@ -662,21 +508,7 @@
           showCaptureFallback("Live camera access is not available in this browser.");
           return;
         }
-        const detectorInstance = ensureDetector();
-        if (!detectorInstance) {
-          await startQuaggaScan();
-          return;
-        }
-        videoEl.classList.remove("d-none");
-        try {
-          await startStreamWithFallbacks();
-        } catch (err) {
-          showCaptureFallback("Camera access was blocked. Use photo capture instead.");
-          return;
-        }
-        scanning = true;
-        statusEl.textContent = "Point the camera at the UPC barcode.";
-        scanLoop();
+        await startQuaggaScan();
       };
 
       captureBtn.addEventListener("click", () => {
@@ -689,10 +521,7 @@
         if (!file) return;
         statusEl.textContent = "Scanning photo…";
         try {
-          let barcodes = await decodeWithDetector(file);
-          if (!barcodes || !barcodes.length) {
-            barcodes = await decodeWithQuagga(file);
-          }
+          const barcodes = await decodeWithQuagga(file);
           if (barcodes && barcodes.length) {
             const rawValue = barcodes[0].rawValue;
             appendValue(rawValue);
@@ -710,13 +539,7 @@
 
       modalEl.addEventListener("hidden.bs.modal", () => {
         scanning = false;
-        if (rafId) {
-          cancelAnimationFrame(rafId);
-          rafId = null;
-        }
         stopQuagga();
-        stopStream();
-        videoEl.classList.remove("d-none");
         statusEl.textContent = "";
         captureInput.value = "";
       });
