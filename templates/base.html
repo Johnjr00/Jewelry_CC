@@ -209,7 +209,9 @@
         </div>
         <div class="modal-body">
           <div class="ratio ratio-16x9 glass-soft overflow-hidden">
-            <video id="upcScannerVideo" autoplay muted playsinline></video>
+            <div id="upcScannerViewport" class="w-100 h-100 position-relative">
+              <video id="upcScannerVideo" class="w-100 h-100" autoplay muted playsinline></video>
+            </div>
           </div>
           <div class="text-white-50 mt-3" data-role="status"></div>
           <div class="text-white-50 mt-1 d-none" data-role="support">
@@ -248,12 +250,17 @@
       const captureEl = modalEl.querySelector("[data-role='capture']");
       const captureBtn = modalEl.querySelector("[data-role='capture-btn']");
       const captureInput = modalEl.querySelector("[data-role='capture-input']");
+      const viewportEl = document.getElementById("upcScannerViewport");
       const modal = new bootstrap.Modal(modalEl);
       let activeInput = null;
       let activeStream = null;
       let scanning = false;
       let detector = null;
       let rafId = null;
+      let scanCanvas = null;
+      let scanCtx = null;
+      let quaggaActive = false;
+      let quaggaHandler = null;
 
       const formats = ["upc_a", "upc_e", "ean_13", "ean_8"];
 
@@ -264,6 +271,26 @@
         }
         if (videoEl) {
           videoEl.srcObject = null;
+        }
+      };
+
+      const stopQuagga = async () => {
+        if (!quaggaActive) return;
+        try {
+          const Quagga = window.Quagga;
+          if (Quagga) {
+            if (quaggaHandler && Quagga.offDetected) {
+              Quagga.offDetected(quaggaHandler);
+            }
+            Quagga.stop();
+          }
+        } catch (error) {
+          // Ignore cleanup errors.
+        }
+        quaggaActive = false;
+        quaggaHandler = null;
+        if (viewportEl) {
+          viewportEl.querySelectorAll("canvas").forEach((canvas) => canvas.remove());
         }
       };
 
@@ -472,8 +499,24 @@
 
       const scanLoop = () => {
         if (!scanning || !detector) return;
+        if (!scanCanvas) {
+          scanCanvas = document.createElement("canvas");
+          scanCtx = scanCanvas.getContext("2d");
+        }
+        if (!scanCtx) return;
+        const width = videoEl.videoWidth;
+        const height = videoEl.videoHeight;
+        if (!width || !height) {
+          rafId = requestAnimationFrame(scanLoop);
+          return;
+        }
+        if (scanCanvas.width !== width || scanCanvas.height !== height) {
+          scanCanvas.width = width;
+          scanCanvas.height = height;
+        }
+        scanCtx.drawImage(videoEl, 0, 0, width, height);
         detector
-          .detect(videoEl)
+          .detect(scanCanvas)
           .then((barcodes) => {
             if (barcodes && barcodes.length) {
               const rawValue = barcodes[0].rawValue;
@@ -491,6 +534,56 @@
           });
       };
 
+      const startQuaggaScan = async () => {
+        statusEl.textContent = "Starting camera…";
+        supportEl.classList.add("d-none");
+        captureEl.classList.add("d-none");
+        videoEl.classList.add("d-none");
+        await stopStream();
+        const Quagga = await loadQuagga();
+        if (!Quagga) {
+          showCaptureFallback("Live scanning is unavailable. Use photo capture instead.");
+          return;
+        }
+        quaggaHandler = (result) => {
+          if (!result || !result.codeResult || !result.codeResult.code) return;
+          const rawValue = result.codeResult.code;
+          appendValue(rawValue);
+          statusEl.textContent = `Captured ${normalizeBarcodeValue(rawValue)}`;
+          modal.hide();
+        };
+        return new Promise((resolve) => {
+          Quagga.init(
+            {
+              inputStream: {
+                type: "LiveStream",
+                target: viewportEl,
+                constraints: {
+                  facingMode: "environment",
+                  width: { ideal: 1280 },
+                  height: { ideal: 720 },
+                },
+              },
+              locator: { patchSize: "medium", halfSample: true },
+              decoder: { readers: ["upc_reader", "upc_e_reader", "ean_reader", "ean_8_reader"] },
+            },
+            (err) => {
+              if (err) {
+                showCaptureFallback("Live scanning is unavailable. Use photo capture instead.");
+                resolve();
+                return;
+              }
+              quaggaActive = true;
+              Quagga.onDetected(quaggaHandler);
+              Quagga.start();
+              scanning = true;
+              statusEl.textContent = "Point the camera at the UPC barcode.";
+              resolve();
+            }
+          );
+        });
+      };
+
       const startScan = async () => {
         statusEl.textContent = "Starting camera…";
         supportEl.classList.add("d-none");
@@ -503,22 +596,21 @@
           showCaptureFallback("Live camera access is not available in this browser.");
           return;
         }
+        const detectorInstance = ensureDetector();
+        if (!detectorInstance) {
+          await startQuaggaScan();
+          return;
+        }
+        videoEl.classList.remove("d-none");
         try {
           activeStream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { ideal: "environment" } },
-          audio: false,
-        });
+            audio: false,
+          });
           videoEl.srcObject = activeStream;
           await videoEl.play();
         } catch (err) {
           showCaptureFallback("Camera access was blocked. Use photo capture instead.");
-          return;
-        }
-        if (!ensureDetector()) {
-          stopStream();
-          statusEl.textContent = "Live scanning is unavailable. Use photo capture instead.";
-          captureEl.classList.remove("d-none");
-          supportEl.classList.remove("d-none");
           return;
         }
         scanning = true;
@@ -561,7 +653,9 @@
           cancelAnimationFrame(rafId);
           rafId = null;
         }
+        stopQuagga();
         stopStream();
+        videoEl.classList.remove("d-none");
         statusEl.textContent = "";
         captureInput.value = "";
       });
