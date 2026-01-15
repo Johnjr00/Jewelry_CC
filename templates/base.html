@@ -254,6 +254,12 @@
       let scanning = false;
       let quaggaActive = false;
       let quaggaHandler = null;
+      let pendingCode = null;
+      let pendingCount = 0;
+      let pendingTimer = null;
+      const requiredDetections = 3;
+      const detectionWindowMs = 1200;
+      const maxAllowedError = 0.25;
 
       const stopQuagga = async () => {
         if (!quaggaActive) return;
@@ -284,6 +290,26 @@
           return digitsOnly.slice(1);
         }
         return digitsOnly.length >= 12 ? digitsOnly : trimmed;
+      };
+
+      const scoreDetection = (result) => {
+        if (!result || !result.codeResult) return null;
+        const codes = result.codeResult.decodedCodes || [];
+        const errors = codes
+          .map((code) => code.error)
+          .filter((error) => typeof error === "number" && Number.isFinite(error));
+        if (!errors.length) return null;
+        const avgError = errors.reduce((sum, error) => sum + error, 0) / errors.length;
+        return avgError;
+      };
+
+      const resetPendingDetection = () => {
+        pendingCode = null;
+        pendingCount = 0;
+        if (pendingTimer) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
       };
 
       const appendValue = (value) => {
@@ -441,7 +467,29 @@
         }
         quaggaHandler = (result) => {
           if (!result || !result.codeResult || !result.codeResult.code) return;
+          const avgError = scoreDetection(result);
+          if (avgError === null || avgError > maxAllowedError) {
+            resetPendingDetection();
+            return;
+          }
           const rawValue = result.codeResult.code;
+          if (pendingCode === rawValue) {
+            pendingCount += 1;
+          } else {
+            pendingCode = rawValue;
+            pendingCount = 1;
+          }
+          if (pendingTimer) {
+            clearTimeout(pendingTimer);
+          }
+          pendingTimer = setTimeout(() => {
+            resetPendingDetection();
+          }, detectionWindowMs);
+          if (pendingCount < requiredDetections) {
+            statusEl.textContent = "Hold still… verifying barcode.";
+            return;
+          }
+          resetPendingDetection();
           appendValue(rawValue);
           statusEl.textContent = `Captured ${normalizeBarcodeValue(rawValue)}`;
           modal.hide();
@@ -540,6 +588,7 @@
       modalEl.addEventListener("hidden.bs.modal", () => {
         scanning = false;
         stopQuagga();
+        resetPendingDetection();
         statusEl.textContent = "";
         captureInput.value = "";
       });
