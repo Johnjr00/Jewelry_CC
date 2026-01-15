@@ -274,6 +274,72 @@
         }
       };
 
+      const attachStreamToVideo = async (stream) => {
+        videoEl.setAttribute("autoplay", "true");
+        videoEl.setAttribute("muted", "true");
+        videoEl.setAttribute("playsinline", "true");
+        videoEl.setAttribute("webkit-playsinline", "true");
+        videoEl.playsInline = true;
+        videoEl.muted = true;
+        videoEl.autoplay = true;
+        videoEl.srcObject = stream;
+        await new Promise((resolve) => {
+          if (videoEl.readyState >= 1) {
+            resolve();
+            return;
+          }
+          videoEl.onloadedmetadata = () => resolve();
+        });
+        await videoEl.play();
+        await new Promise((resolve, reject) => {
+          const deadline = Date.now() + 1500;
+          const checkFrame = () => {
+            if (videoEl.videoWidth && videoEl.videoHeight) {
+              resolve();
+              return;
+            }
+            if (Date.now() > deadline) {
+              reject(new Error("No video frames available."));
+              return;
+            }
+            requestAnimationFrame(checkFrame);
+          };
+          checkFrame();
+        });
+      };
+
+      const startStreamWithFallbacks = async () => {
+        const attempts = [
+          {
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+            audio: false,
+          },
+          { video: { facingMode: "environment" }, audio: false },
+          { video: true, audio: false },
+        ];
+        let lastError = null;
+        for (const constraints of attempts) {
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            try {
+              await attachStreamToVideo(stream);
+              activeStream = stream;
+              return;
+            } catch (error) {
+              stream.getTracks().forEach((track) => track.stop());
+              lastError = error;
+            }
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        throw lastError || new Error("Unable to start camera.");
+      };
+
       const stopQuagga = async () => {
         if (!quaggaActive) return;
         try {
@@ -603,30 +669,7 @@
         }
         videoEl.classList.remove("d-none");
         try {
-          videoEl.setAttribute("autoplay", "");
-          videoEl.setAttribute("muted", "");
-          videoEl.setAttribute("playsinline", "");
-          videoEl.setAttribute("webkit-playsinline", "");
-          videoEl.playsInline = true;
-          videoEl.muted = true;
-          videoEl.autoplay = true;
-          activeStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: { ideal: "environment" },
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-            },
-            audio: false,
-          });
-          videoEl.srcObject = activeStream;
-          await new Promise((resolve) => {
-            if (videoEl.readyState >= 1) {
-              resolve();
-              return;
-            }
-            videoEl.onloadedmetadata = () => resolve();
-          });
-          await videoEl.play();
+          await startStreamWithFallbacks();
         } catch (err) {
           showCaptureFallback("Camera access was blocked. Use photo capture instead.");
           return;
