@@ -160,7 +160,13 @@
       {% if user %}
       <div class="d-flex align-items-center gap-2">
         <span class="chip d-none d-md-inline">👤 {{ user.username }} · {{ user.role }}</span>
+        {% if current_location %}
+          <span class="chip d-none d-md-inline">📍 {{ current_location.name }}</span>
+        {% endif %}
         <a class="btn btn-outline-light btn-sm" href="{{ url_for('index') }}">Home</a>
+        {% if user.role == 'admin' %}
+          <a class="btn btn-outline-light btn-sm" href="{{ url_for('select_location') }}">Switch Store</a>
+        {% endif %}
         <a class="btn btn-outline-light btn-sm" href="{{ url_for('logout') }}">Logout</a>
       </div>
       {% endif %}
@@ -180,6 +186,7 @@
           <a class="btn btn-outline-light" href="{{ url_for('daily_activity_reports') }}">Daily Reports</a>
         {% if user.role == 'admin' %}
           <a class="btn btn-outline-light" href="{{ url_for('users') }}">Users</a>
+          <a class="btn btn-outline-light" href="{{ url_for('locations_admin') }}">Locations</a>
         {% endif %}
       </div>
     </div>

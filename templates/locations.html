@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="glass p-3 p-md-4 mb-3">
+  <div class="fw-bold fs-4">Store Locations</div>
+  <div class="text-white-50 mb-3">Create and manage store locations.</div>
+
+  <form method="post" class="row g-2">
+    <div class="col-12 col-md-8">
+      <label class="form-label text-white-50">Location Name</label>
+      <input class="form-control" name="name" required>
+    </div>
+    <div class="col-12 col-md-4 d-flex align-items-end">
+      <button class="btn btn-success w-100">Add Location</button>
+    </div>
+  </form>
+</div>
+
+<div class="glass-soft p-3 p-md-4">
+  <div class="fw-bold fs-5 mb-2">Existing Locations</div>
+
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Active</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for location in locations %}
+        <tr>
+          <td class="text-white-50 small">{{ location.id }}</td>
+          <td>{{ location.name }}</td>
+          <td class="small">{{ "Yes" if location.is_active==1 else "No" }}</td>
+          <td class="text-white-50 small">{{ location.created_at }}</td>
+        </tr>
+        {% endfor %}
+        {% if locations|length == 0 %}
+          <tr><td colspan="4" class="text-white-50">No locations.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

@@ -36,6 +36,7 @@ STORE_TZ = ZoneInfo("America/Phoenix")
 
 ROLE_ADMIN = "admin"
 ROLE_STAFF = "staff"
+DEFAULT_LOCATION_NAME = "Main Store"
 
 ACTION_RECEIVE = "RECEIVE"
 ACTION_MOVE = "MOVE"
@@ -133,6 +134,49 @@ def get_db() -> sqlite3.Connection:
 
         # Lightweight migrations (safe no-ops if already applied)
         try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS locations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+            default_location = conn.execute(
+                "SELECT id FROM locations ORDER BY id LIMIT 1"
+            ).fetchone()
+            if not default_location:
+                conn.execute(
+                    "INSERT INTO locations (name, is_active, created_at) VALUES (?, 1, ?)",
+                    (DEFAULT_LOCATION_NAME, utc_now()),
+                )
+                default_location = conn.execute(
+                    "SELECT id FROM locations ORDER BY id LIMIT 1"
+                ).fetchone()
+            default_location_id = default_location["id"]
+
+            user_cols = [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if "location_id" not in user_cols:
+                conn.execute("ALTER TABLE users ADD COLUMN location_id INTEGER")
+                conn.execute("UPDATE users SET location_id=? WHERE location_id IS NULL", (default_location_id,))
+
+            case_cols = [r["name"] for r in conn.execute("PRAGMA table_info(cases)").fetchall()]
+            if "location_id" not in case_cols:
+                conn.execute("ALTER TABLE cases ADD COLUMN location_id INTEGER")
+                conn.execute("UPDATE cases SET location_id=? WHERE location_id IS NULL", (default_location_id,))
+
+            count_cols = [r["name"] for r in conn.execute("PRAGMA table_info(case_counts)").fetchall()]
+            if "location_id" not in count_cols:
+                conn.execute("ALTER TABLE case_counts ADD COLUMN location_id INTEGER")
+                conn.execute("UPDATE case_counts SET location_id=? WHERE location_id IS NULL", (default_location_id,))
+
+            hist_cols = [r["name"] for r in conn.execute("PRAGMA table_info(history)").fetchall()]
+            if "location_id" not in hist_cols:
+                conn.execute("ALTER TABLE history ADD COLUMN location_id INTEGER")
+                conn.execute("UPDATE history SET location_id=? WHERE location_id IS NULL", (default_location_id,))
+
             cols = [r["name"] for r in conn.execute("PRAGMA table_info(case_counts)").fetchall()]
             if "other" not in cols:
                 conn.execute("ALTER TABLE case_counts ADD COLUMN other INTEGER NOT NULL DEFAULT 0 CHECK(other >= 0)")
@@ -276,12 +320,21 @@ def init_db():
 
     db.executescript(
         """
+        CREATE TABLE IF NOT EXISTS locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS cases (
             case_code TEXT PRIMARY KEY,
+            location_id INTEGER NOT NULL,
             case_name TEXT NOT NULL,
             is_virtual INTEGER NOT NULL DEFAULT 0,
             is_active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(location_id) REFERENCES locations(id)
         );
 
         CREATE TABLE IF NOT EXISTS products (
@@ -305,7 +358,9 @@ def init_db():
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL CHECK(role IN ('admin','staff')),
             is_active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL
+            location_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(location_id) REFERENCES locations(id)
         );
 
 
@@ -314,6 +369,7 @@ CREATE TABLE IF NOT EXISTS case_counts (
     ts_utc TEXT NOT NULL,
     local_date TEXT NOT NULL,
     case_code TEXT NOT NULL,
+    location_id INTEGER NOT NULL,
     user_id INTEGER,
     username TEXT,
     bracelets INTEGER NOT NULL CHECK(bracelets >= 0),
@@ -329,6 +385,7 @@ CREATE TABLE IF NOT EXISTS case_counts (
     total INTEGER NOT NULL CHECK(total >= 0),
     notes TEXT,
     FOREIGN KEY(case_code) REFERENCES cases(case_code),
+    FOREIGN KEY(location_id) REFERENCES locations(id),
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
@@ -351,7 +408,9 @@ CREATE INDEX IF NOT EXISTS idx_case_counts_case ON case_counts(case_code);
     brief_desc TEXT,
     ticket_price REAL,
     diamond_test TEXT,
-    FOREIGN KEY(user_id) REFERENCES users(id)
+    location_id INTEGER,
+    FOREIGN KEY(user_id) REFERENCES users(id),
+    FOREIGN KEY(location_id) REFERENCES locations(id)
 );
 
         CREATE INDEX IF NOT EXISTS idx_inv_case ON inventory(case_code);
@@ -367,13 +426,35 @@ CREATE INDEX IF NOT EXISTS idx_case_counts_case ON case_counts(case_code);
     cols = [r["name"] for r in db.execute("PRAGMA table_info(products)").fetchall()]
     if "item_type" not in cols:
         db.execute("ALTER TABLE products ADD COLUMN item_type TEXT;")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    default_location = db.execute(
+        "SELECT id FROM locations ORDER BY id LIMIT 1"
+    ).fetchone()
+    if not default_location:
+        db.execute(
+            "INSERT INTO locations (name, is_active, created_at) VALUES (?, 1, ?)",
+            (DEFAULT_LOCATION_NAME, utc_now()),
+        )
+        default_location = db.execute(
+            "SELECT id FROM locations ORDER BY id LIMIT 1"
+        ).fetchone()
+    default_location_id = default_location["id"]
     # Ensure New Receipts exists
     db.execute(
         """
-        INSERT OR IGNORE INTO cases (case_code, case_name, is_virtual, is_active, created_at)
-        VALUES (?, ?, 1, 1, ?)
+        INSERT OR IGNORE INTO cases (case_code, location_id, case_name, is_virtual, is_active, created_at)
+        VALUES (?, ?, ?, 1, 1, ?)
         """,
-        (NEW_RECEIPTS_CODE, NEW_RECEIPTS_NAME, utc_now()),
+        (NEW_RECEIPTS_CODE, default_location_id, NEW_RECEIPTS_NAME, utc_now()),
     )
 
     # --- Lightweight migration for history SOLD fields (safe on existing DBs)
@@ -411,6 +492,7 @@ class CurrentUser:
     id: int
     username: str
     role: str
+    location_id: Optional[int]
 
 
 def current_user() -> Optional[CurrentUser]:
@@ -419,13 +501,18 @@ def current_user() -> Optional[CurrentUser]:
         return None
     db = get_db()
     row = db.execute(
-        "SELECT id, username, role FROM users WHERE id=? AND is_active=1",
+        "SELECT id, username, role, location_id FROM users WHERE id=? AND is_active=1",
         (uid,),
     ).fetchone()
     if not row:
         session.pop("user_id", None)
         return None
-    return CurrentUser(id=row["id"], username=row["username"], role=row["role"])
+    return CurrentUser(
+        id=row["id"],
+        username=row["username"],
+        role=row["role"],
+        location_id=row["location_id"],
+    )
 
 
 def login_required(fn):
@@ -434,8 +521,33 @@ def login_required(fn):
         # Force initial setup on brand-new installs
         if not is_setup_complete() and request.endpoint != "setup":
             return redirect(url_for("setup"))
-        if not current_user():
+        u = current_user()
+        if not u:
             return redirect(url_for("login", next=request.path))
+        if u.role == ROLE_ADMIN:
+            if current_location_id():
+                valid_location = get_db().execute(
+                    "SELECT id FROM locations WHERE id=? AND is_active=1",
+                    (current_location_id(),),
+                ).fetchone()
+                if not valid_location:
+                    session.pop("location_id", None)
+            if not current_location_id():
+                if request.endpoint not in (
+                    "select_location",
+                    "locations_admin",
+                    "logout",
+                    "login",
+                    "setup",
+                    "static",
+                ):
+                    return redirect(url_for("select_location"))
+        else:
+            if not u.location_id:
+                session.pop("user_id", None)
+                flash("No store location assigned. Contact an admin.", "danger")
+                return redirect(url_for("login"))
+            session["location_id"] = u.location_id
         return fn(*args, **kwargs)
     return wrapper
 
@@ -454,6 +566,41 @@ def role_required(role: str):
         return wrapper
     return deco
 
+
+def current_location_id() -> Optional[int]:
+    u = current_user()
+    if not u:
+        return None
+    if u.role == ROLE_ADMIN:
+        return session.get("location_id")
+    return u.location_id
+
+
+def current_location() -> Optional[sqlite3.Row]:
+    loc_id = session.get("location_id")
+    if not loc_id:
+        return None
+    db = get_db()
+    return db.execute(
+        "SELECT id, name FROM locations WHERE id=? AND is_active=1",
+        (loc_id,),
+    ).fetchone()
+
+
+def new_receipts_case_code(location_id: Optional[int]) -> str:
+    if not location_id:
+        return NEW_RECEIPTS_CODE
+    db = get_db()
+    row = db.execute("SELECT id FROM locations ORDER BY id LIMIT 1").fetchone()
+    default_location_id = row["id"] if row else None
+    if location_id == default_location_id:
+        return NEW_RECEIPTS_CODE
+    return f"{NEW_RECEIPTS_CODE}-{location_id}"
+
+
+@app.context_processor
+def inject_location():
+    return {"current_location": current_location()}
 
 
 
@@ -514,17 +661,18 @@ def _local_date_str_from_ts(ts: str) -> str:
         return ""
     return dt.date().isoformat()
 
-def _daily_activity_totals(case_code: str, local_date: str) -> tuple[int, int, int]:
+def _daily_activity_totals(case_code: str, local_date: str, location_id: int) -> tuple[int, int, int]:
     db = get_db()
     events = db.execute(
         """
         SELECT h.ts, h.action, h.qty, h.from_case_code, h.to_case_code
         FROM history h
         WHERE h.action IN ('RECEIVE','MOVE','SOLD','MISSING')
+          AND h.location_id = ?
           AND (h.from_case_code = ? OR h.to_case_code = ?)
         ORDER BY h.ts ASC, h.id ASC
         """,
-        (case_code, case_code),
+        (location_id, case_code, case_code),
     ).fetchall()
 
     total_in = 0
@@ -555,7 +703,7 @@ def _daily_activity_totals(case_code: str, local_date: str) -> tuple[int, int, i
 
     return total_in, total_out, total_in - total_out
 
-def build_daily_activity_workbook(case_code: str, local_date: str):
+def build_daily_activity_workbook(case_code: str, local_date: str, location_id: int):
     """Return an openpyxl workbook for the given case and local_date (YYYY-MM-DD) using MASTER ACTIVITY LOG template."""
     # Load template (relative to project root). Users should keep MASTER ACTIVITY LOG.xlsx next to app folder.
     template_path = ACTIVITY_LOG_TEMPLATE
@@ -575,7 +723,10 @@ def build_daily_activity_workbook(case_code: str, local_date: str):
     ws["A1"].value = f"MONTH:  {dt.strftime('%B').upper()}"
     # Case display name
     db = get_db()
-    c = db.execute("SELECT case_name FROM cases WHERE case_code = ?", (case_code,)).fetchone()
+    c = db.execute(
+        "SELECT case_name FROM cases WHERE case_code = ? AND location_id = ?",
+        (case_code, location_id),
+    ).fetchone()
     case_name = (c["case_name"] if c else "") or ""
     ws["E1"].value = f"CASE #: {case_code} {case_name}".strip()
 
@@ -592,10 +743,11 @@ def build_daily_activity_workbook(case_code: str, local_date: str):
         LEFT JOIN users u ON u.id = h.user_id
         LEFT JOIN products p ON p.upc = h.upc
         WHERE h.action IN ('RECEIVE','MOVE','SOLD','MISSING')
+          AND h.location_id = ?
           AND (h.from_case_code = ? OR h.to_case_code = ?)
         ORDER BY h.ts ASC, h.id ASC
         """,
-        (case_code, case_code),
+        (location_id, case_code, case_code),
     ).fetchall()
 
     # Filter by local_date in Python to avoid SQLite timezone issues
@@ -693,7 +845,7 @@ def build_daily_activity_workbook(case_code: str, local_date: str):
     # Keep formatting intact.
     return wb
 
-def build_daily_count_workbook(case_code: str, local_date: str):
+def build_daily_count_workbook(case_code: str, local_date: str, location_id: int):
     """Return an openpyxl workbook for the given case and local_date (YYYY-MM-DD) using Daily Count Sheet template."""
     template_path = DAILY_COUNT_TEMPLATE
     if not os.path.exists(template_path):
@@ -731,22 +883,22 @@ def build_daily_count_workbook(case_code: str, local_date: str):
         """
         SELECT *
         FROM case_counts
-        WHERE case_code=? AND local_date < ?
+        WHERE case_code=? AND local_date < ? AND location_id=?
         ORDER BY local_date DESC, id DESC
         LIMIT 1
         """,
-        (case_code, local_date),
+        (case_code, local_date, location_id),
     ).fetchone()
 
     count = db.execute(
         """
         SELECT *
         FROM case_counts
-        WHERE case_code=? AND local_date=?
+        WHERE case_code=? AND local_date=? AND location_id=?
         ORDER BY id DESC
         LIMIT 1
         """,
-        (case_code, local_date),
+        (case_code, local_date, location_id),
     ).fetchone()
 
     if previous_count:
@@ -756,7 +908,7 @@ def build_daily_count_workbook(case_code: str, local_date: str):
         if previous_initials:
             ws.cell(start_row + 7, 6).value = previous_initials
 
-    total_in, total_out, net = _daily_activity_totals(case_code, local_date)
+    total_in, total_out, net = _daily_activity_totals(case_code, local_date, location_id)
     ws.cell(start_row + 3, 13).value = total_in
     ws.cell(start_row + 3, 14).value = total_out
     ws.cell(start_row + 3, 15).value = net
@@ -800,6 +952,7 @@ def build_daily_count_workbook(case_code: str, local_date: str):
 def counts():
     db = get_db()
     today = local_date_str()
+    location_id = current_location_id()
 
     cases = db.execute(
         f"""
@@ -808,10 +961,11 @@ def counts():
                COALESCE(COUNT(DISTINCT i.upc), 0) AS distinct_upcs
         FROM cases c
         LEFT JOIN inventory i ON i.case_code = c.case_code
-        WHERE c.is_active = 1
+        WHERE c.is_active = 1 AND c.location_id = ?
         GROUP BY c.case_code
         {case_order_sql()}
-        """
+        """,
+        (location_id,),
     ).fetchall()
 
     # Latest count per case for today
@@ -822,11 +976,11 @@ def counts():
         JOIN (
           SELECT case_code, MAX(id) AS max_id
           FROM case_counts
-          WHERE local_date=?
+          WHERE local_date=? AND location_id=?
           GROUP BY case_code
         ) m ON m.max_id = cc.id
         """,
-        (today,),
+        (today, location_id),
     ).fetchall()
     counts_map = {r["case_code"]: r for r in counts_rows}
 
@@ -847,7 +1001,7 @@ def counts():
         today=today,
         count_categories=COUNT_CATEGORIES,
         user=current_user(),
-        new_receipts_code=NEW_RECEIPTS_CODE,
+        new_receipts_code=new_receipts_case_code(location_id),
     )
 
 
@@ -860,7 +1014,11 @@ def count_case(case_code: str):
         return redirect(url_for("counts"))
 
     db = get_db()
-    case = db.execute("SELECT * FROM cases WHERE case_code=?", (case_code,)).fetchone()
+    location_id = current_location_id()
+    case = db.execute(
+        "SELECT * FROM cases WHERE case_code=? AND location_id=?",
+        (case_code, location_id),
+    ).fetchone()
     if not case or case["is_active"] != 1:
         flash("Case not found.", "danger")
         return redirect(url_for("counts"))
@@ -874,11 +1032,11 @@ def count_case(case_code: str):
         """
         SELECT *
         FROM case_counts
-        WHERE case_code=? AND local_date=?
+        WHERE case_code=? AND local_date=? AND location_id=?
         ORDER BY id DESC
         LIMIT 1
         """,
-        (case_code, today),
+        (case_code, today, location_id),
     ).fetchone()
 
     if request.method == "POST":
@@ -902,13 +1060,13 @@ def count_case(case_code: str):
         db.execute(
             """
             INSERT INTO case_counts
-              (ts_utc, local_date, case_code, user_id, username,
+              (ts_utc, local_date, case_code, location_id, user_id, username,
                bracelets, rings, earrings, necklaces, other,
                reserve_bracelets, reserve_rings, reserve_earrings, reserve_necklaces, reserve_other,
                total, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
-            (utc_now(), today, case_code,
+            (utc_now(), today, case_code, location_id,
              u.id if u else None, u.username if u else None,
              counts["bracelets"], counts["rings"], counts["earrings"], counts["necklaces"], counts["other"],
              reserve_counts["reserve_bracelets"], reserve_counts["reserve_rings"], reserve_counts["reserve_earrings"],
@@ -949,10 +1107,11 @@ def log_history(
 ):
     db = get_db()
     u = current_user()
+    location_id = current_location_id()
     db.execute(
         """
-        INSERT INTO history (ts, user_id, username, action, upc, qty, from_case_code, to_case_code, notes, trans_reg, dept_no, brief_desc, ticket_price, diamond_test)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO history (ts, user_id, username, action, upc, qty, from_case_code, to_case_code, notes, trans_reg, dept_no, brief_desc, ticket_price, diamond_test, location_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             utc_now(),
@@ -969,6 +1128,7 @@ def log_history(
             brief_desc,
             ticket_price,
             diamond_test,
+            location_id,
         ),
     )
     db.commit()
@@ -1009,9 +1169,10 @@ def parse_upc_lines(text: str) -> Dict[str, int]:
 # ---------------- Inventory operations ----------------
 def ensure_case_exists(case_code: str) -> bool:
     db = get_db()
+    location_id = current_location_id()
     row = db.execute(
-        "SELECT case_code FROM cases WHERE case_code=? AND is_active=1",
-        (case_code,),
+        "SELECT case_code FROM cases WHERE case_code=? AND is_active=1 AND location_id=?",
+        (case_code, location_id),
     ).fetchone()
     return bool(row)
 
@@ -1155,9 +1316,16 @@ def setup():
             flash("Username required. Password must be at least 8 characters.", "danger")
             return redirect(url_for("setup"))
 
+        default_location = db.execute(
+            "SELECT id FROM locations ORDER BY id LIMIT 1"
+        ).fetchone()
+        default_location_id = default_location["id"] if default_location else None
         db.execute(
-            "INSERT INTO users (username, password_hash, role, is_active, created_at) VALUES (?,?,?,?,?)",
-            (username, generate_password_hash(password), ROLE_ADMIN, 1, utc_now()),
+            """
+            INSERT INTO users (username, password_hash, role, is_active, location_id, created_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (username, generate_password_hash(password), ROLE_ADMIN, 1, default_location_id, utc_now()),
         )
         db.commit()
         flash("Admin user created. Log in.", "success")
@@ -1172,6 +1340,8 @@ def login():
         return redirect(url_for("setup"))
 
     if current_user():
+        if current_user().role == ROLE_ADMIN and not current_location_id():
+            return redirect(url_for("select_location"))
         return redirect(url_for("index"))
 
     if request.method == "POST":
@@ -1179,7 +1349,7 @@ def login():
         password = request.form.get("password") or ""
         db = get_db()
         row = db.execute(
-            "SELECT id, username, password_hash, role, is_active FROM users WHERE username=?",
+            "SELECT id, username, password_hash, role, is_active, location_id FROM users WHERE username=?",
             (username,),
         ).fetchone()
         if not row or row["is_active"] != 1 or not check_password_hash(row["password_hash"], password):
@@ -1187,9 +1357,15 @@ def login():
             return redirect(url_for("login"))
 
         session["user_id"] = row["id"]
+        if row["role"] == ROLE_STAFF:
+            session["location_id"] = row["location_id"]
+            flash("Logged in.", "success")
+            nxt = request.args.get("next")
+            return redirect(nxt or url_for("index"))
+
+        session.pop("location_id", None)
         flash("Logged in.", "success")
-        nxt = request.args.get("next")
-        return redirect(nxt or url_for("index"))
+        return redirect(url_for("select_location"))
 
     return render_template("login.html")
 
@@ -1197,15 +1373,102 @@ def login():
 @app.route("/logout")
 def logout():
     session.pop("user_id", None)
+    session.pop("location_id", None)
     flash("Logged out.", "success")
     return redirect(url_for("login"))
 
+
+# ---------------- Locations ----------------
+@app.route("/locations/select", methods=["GET", "POST"])
+@login_required
+@role_required(ROLE_ADMIN)
+def select_location():
+    db = get_db()
+    locations = db.execute(
+        "SELECT id, name FROM locations WHERE is_active=1 ORDER BY name"
+    ).fetchall()
+
+    if request.method == "POST":
+        location_id = request.form.get("location_id")
+        try:
+            location_id_int = int(location_id)
+        except (TypeError, ValueError):
+            flash("Select a valid location.", "danger")
+            return redirect(url_for("select_location"))
+
+        exists = db.execute(
+            "SELECT id FROM locations WHERE id=? AND is_active=1",
+            (location_id_int,),
+        ).fetchone()
+        if not exists:
+            flash("Select a valid location.", "danger")
+            return redirect(url_for("select_location"))
+
+        session["location_id"] = location_id_int
+        flash("Location selected.", "success")
+        return redirect(url_for("index"))
+
+    return render_template(
+        "select_location.html",
+        locations=locations,
+        current_location_id=session.get("location_id"),
+        user=current_user(),
+    )
+
+
+@app.route("/admin/locations", methods=["GET", "POST"])
+@login_required
+@role_required(ROLE_ADMIN)
+def locations_admin():
+    db = get_db()
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            flash("Location name is required.", "danger")
+            return redirect(url_for("locations_admin"))
+        existing = db.execute(
+            "SELECT id FROM locations WHERE name=?",
+            (name,),
+        ).fetchone()
+        if existing:
+            flash("That location already exists.", "danger")
+            return redirect(url_for("locations_admin"))
+
+        db.execute(
+            "INSERT INTO locations (name, is_active, created_at) VALUES (?, 1, ?)",
+            (name, utc_now()),
+        )
+        location_id = db.execute(
+            "SELECT id FROM locations WHERE name=?",
+            (name,),
+        ).fetchone()["id"]
+        new_receipts_code = new_receipts_case_code(location_id)
+        db.execute(
+            """
+            INSERT OR IGNORE INTO cases (case_code, location_id, case_name, is_virtual, is_active, created_at)
+            VALUES (?, ?, ?, 1, 1, ?)
+            """,
+            (new_receipts_code, location_id, NEW_RECEIPTS_NAME, utc_now()),
+        )
+        db.commit()
+        flash("Location created.", "success")
+        return redirect(url_for("locations_admin"))
+
+    locations = db.execute(
+        "SELECT id, name, is_active, created_at FROM locations ORDER BY name"
+    ).fetchall()
+    return render_template(
+        "locations.html",
+        locations=locations,
+        user=current_user(),
+    )
 
 # ---------------- Main: Case Grid ----------------
 @app.route("/")
 @login_required
 def index():
     db = get_db()
+    location_id = current_location_id()
     cases = db.execute(
         f"""
         SELECT c.case_code, c.case_name, c.is_virtual, c.is_active,
@@ -1213,10 +1476,11 @@ def index():
                COALESCE(COUNT(DISTINCT i.upc), 0) AS distinct_upcs
         FROM cases c
         LEFT JOIN inventory i ON i.case_code = c.case_code
-        WHERE c.is_active = 1
+        WHERE c.is_active = 1 AND c.location_id = ?
         GROUP BY c.case_code
         {case_order_sql()}
-        """
+        """,
+        (location_id,),
     ).fetchall()
 
     recent = db.execute(
@@ -1224,9 +1488,11 @@ def index():
         SELECT h.*, p.item_type
         FROM history h
         LEFT JOIN products p ON p.upc = h.upc
+        WHERE h.location_id = ?
         ORDER BY h.id DESC
         LIMIT 25
-        """
+        """,
+        (location_id,),
     ).fetchall()
 
     return render_template("index.html", cases=cases, recent=recent, user=current_user())
@@ -1238,19 +1504,20 @@ def index():
 def create_case():
     case_code = (request.form.get("case_code") or "").strip()
     case_name = (request.form.get("case_name") or "").strip()
+    location_id = current_location_id()
 
     if not case_code or not case_name:
         flash("Case number and name are required.", "danger")
         return redirect(url_for("index"))
-    if case_code == NEW_RECEIPTS_CODE:
+    if case_code == new_receipts_case_code(location_id):
         flash("That case code is reserved.", "danger")
         return redirect(url_for("index"))
 
     db = get_db()
     try:
         db.execute(
-            "INSERT INTO cases (case_code, case_name, is_virtual, is_active, created_at) VALUES (?,?,?,?,?)",
-            (case_code, case_name, 0, 1, utc_now()),
+            "INSERT INTO cases (case_code, location_id, case_name, is_virtual, is_active, created_at) VALUES (?,?,?,?,?,?)",
+            (case_code, location_id, case_name, 0, 1, utc_now()),
         )
         db.commit()
         log_history(ACTION_CASE_CREATE, notes=f"Created case {case_code} ({case_name})")
@@ -1266,8 +1533,12 @@ def create_case():
 def view_case(case_code: str):
     case_code = (case_code or "").strip()
     db = get_db()
+    location_id = current_location_id()
 
-    case = db.execute("SELECT * FROM cases WHERE case_code=?", (case_code,)).fetchone()
+    case = db.execute(
+        "SELECT * FROM cases WHERE case_code=? AND location_id=?",
+        (case_code, location_id),
+    ).fetchone()
     if not case or case["is_active"] != 1:
         flash("Case not found.", "danger")
         return redirect(url_for("index"))
@@ -1331,11 +1602,11 @@ def view_case(case_code: str):
         """
         SELECT *
         FROM case_counts
-        WHERE case_code=? AND local_date=?
+        WHERE case_code=? AND local_date=? AND location_id=?
         ORDER BY id DESC
         LIMIT 1
         """,
-        (case_code, today),
+        (case_code, today, location_id),
     ).fetchone()
 
 
@@ -1344,20 +1615,21 @@ def view_case(case_code: str):
         SELECT h.*, p.item_type
         FROM history h
         LEFT JOIN products p ON p.upc = h.upc
-        WHERE h.from_case_code = ? OR h.to_case_code = ?
+        WHERE h.location_id = ? AND (h.from_case_code = ? OR h.to_case_code = ?)
         ORDER BY id DESC
         LIMIT 150
         """,
-        (case_code, case_code),
+        (location_id, case_code, case_code),
     ).fetchall()
 
     active_cases = db.execute(
         f"""
         SELECT c.case_code, c.case_name, c.is_virtual
         FROM cases c
-        WHERE c.is_active=1
+        WHERE c.is_active=1 AND c.location_id=?
         {case_order_sql()}
-        """
+        """,
+        (location_id,),
     ).fetchall()
 
     return render_template(
@@ -1376,7 +1648,7 @@ def view_case(case_code: str):
         active_cases=active_cases,
         count_categories=COUNT_CATEGORIES,
         user=current_user(),
-        new_receipts_code=NEW_RECEIPTS_CODE,
+        new_receipts_code=new_receipts_case_code(location_id),
     )
 
 
@@ -1421,8 +1693,12 @@ def api_case_items(case_code: str):
 def edit_case(case_code: str):
     case_code = (case_code or "").strip()
     db = get_db()
+    location_id = current_location_id()
 
-    case = db.execute("SELECT * FROM cases WHERE case_code=?", (case_code,)).fetchone()
+    case = db.execute(
+        "SELECT * FROM cases WHERE case_code=? AND location_id=?",
+        (case_code, location_id),
+    ).fetchone()
     if not case or case["is_active"] != 1:
         flash("Case not found.", "danger")
         return redirect(url_for("index"))
@@ -1436,13 +1712,17 @@ def edit_case(case_code: str):
 def edit_case_post(case_code: str):
     case_code = (case_code or "").strip()
     new_name = (request.form.get("case_name") or "").strip()
+    location_id = current_location_id()
 
     if not new_name:
         flash("Case name is required.", "danger")
         return redirect(url_for("edit_case", case_code=case_code))
 
     db = get_db()
-    case = db.execute("SELECT * FROM cases WHERE case_code=?", (case_code,)).fetchone()
+    case = db.execute(
+        "SELECT * FROM cases WHERE case_code=? AND location_id=?",
+        (case_code, location_id),
+    ).fetchone()
     if not case or case["is_active"] != 1:
         flash("Case not found.", "danger")
         return redirect(url_for("index"))
@@ -1452,7 +1732,10 @@ def edit_case_post(case_code: str):
         flash("No changes made.", "warning")
         return redirect(url_for("view_case", case_code=case_code))
 
-    db.execute("UPDATE cases SET case_name=? WHERE case_code=?", (new_name, case_code))
+    db.execute(
+        "UPDATE cases SET case_name=? WHERE case_code=? AND location_id=?",
+        (new_name, case_code, location_id),
+    )
     db.commit()
 
     log_history(ACTION_CASE_EDIT, notes=f"Renamed case {case_code}: '{old_name}' → '{new_name}'")
@@ -1465,20 +1748,29 @@ def edit_case_post(case_code: str):
 @role_required(ROLE_ADMIN)
 def delete_case(case_code: str):
     case_code = (case_code or "").strip()
-    if case_code == NEW_RECEIPTS_CODE:
+    location_id = current_location_id()
+    if case_code == new_receipts_case_code(location_id):
         flash("You can’t delete New Receipts.", "danger")
         return redirect(url_for("index"))
 
     db = get_db()
     cnt = db.execute(
-        "SELECT COALESCE(SUM(qty),0) AS t FROM inventory WHERE case_code=?",
-        (case_code,),
+        """
+        SELECT COALESCE(SUM(i.qty),0) AS t
+        FROM inventory i
+        JOIN cases c ON c.case_code = i.case_code
+        WHERE i.case_code=? AND c.location_id=?
+        """,
+        (case_code, location_id),
     ).fetchone()["t"]
     if cnt and int(cnt) > 0:
         flash("Case must be empty before deletion. Move items out first.", "danger")
         return redirect(url_for("view_case", case_code=case_code))
 
-    db.execute("UPDATE cases SET is_active=0 WHERE case_code=?", (case_code,))
+    db.execute(
+        "UPDATE cases SET is_active=0 WHERE case_code=? AND location_id=?",
+        (case_code, location_id),
+    )
     db.commit()
     log_history(ACTION_CASE_DELETE, notes=f"Deleted/archived case {case_code}")
     flash(f"Case {case_code} deleted (archived).", "success")
@@ -1672,6 +1964,8 @@ def missing_from_case(case_code: str):
 @app.route("/receive", methods=["GET", "POST"])
 @login_required
 def receive():
+    location_id = current_location_id()
+    new_receipts_code = new_receipts_case_code(location_id)
     if request.method == "POST":
         description = (request.form.get("description") or "").strip() or None
         item_type = (request.form.get("item_type") or "").strip()
@@ -1688,12 +1982,18 @@ def receive():
         db = get_db()
         for upc, qty in upc_map.items():
             upsert_product(upc, description, item_type=item_type)
-            add_qty(NEW_RECEIPTS_CODE, upc, qty, LOCATION_CASE)
-            log_history(ACTION_RECEIVE, upc=upc, qty=qty, to_case_code=NEW_RECEIPTS_CODE, notes=f"Received into New Receipts ({item_type})")
+            add_qty(new_receipts_code, upc, qty, LOCATION_CASE)
+            log_history(
+                ACTION_RECEIVE,
+                upc=upc,
+                qty=qty,
+                to_case_code=new_receipts_code,
+                notes=f"Received into New Receipts ({item_type})",
+            )
         db.commit()
 
         flash(f"Received {sum(upc_map.values())} unit(s) into New Receipts.", "success")
-        return redirect(url_for("view_case", case_code=NEW_RECEIPTS_CODE))
+        return redirect(url_for("view_case", case_code=new_receipts_code))
 
     return render_template("receive.html", user=current_user(), item_types=ITEM_TYPES_ORDER)
 
@@ -1703,13 +2003,15 @@ def receive():
 @login_required
 def move():
     db = get_db()
+    location_id = current_location_id()
     active_cases = db.execute(
         f"""
         SELECT c.case_code, c.case_name, c.is_virtual
         FROM cases c
-        WHERE c.is_active=1
+        WHERE c.is_active=1 AND c.location_id=?
         {case_order_sql()}
-        """
+        """,
+        (location_id,),
     ).fetchall()
 
     if request.method == "POST":
@@ -1746,7 +2048,12 @@ def move():
         flash(f"Moved {sum(upc_map.values())} unit(s) from {from_case} → {to_case}.", "success")
         return redirect(url_for("view_case", case_code=to_case))
 
-    return render_template("move.html", active_cases=active_cases, user=current_user(), new_receipts_code=NEW_RECEIPTS_CODE)
+    return render_template(
+        "move.html",
+        active_cases=active_cases,
+        user=current_user(),
+        new_receipts_code=new_receipts_case_code(location_id),
+    )
 
 
 # ---------------- Standalone Sell/Missing ----------------
@@ -1754,13 +2061,15 @@ def move():
 @login_required
 def sell():
     db = get_db()
+    location_id = current_location_id()
     active_cases = db.execute(
         f"""
         SELECT c.case_code, c.case_name, c.is_virtual
         FROM cases c
-        WHERE c.is_active=1
+        WHERE c.is_active=1 AND c.location_id=?
         {case_order_sql()}
-        """
+        """,
+        (location_id,),
     ).fetchall()
 
     if request.method == "POST":
@@ -1812,13 +2121,15 @@ def sell():
 @login_required
 def missing():
     db = get_db()
+    location_id = current_location_id()
     active_cases = db.execute(
         f"""
         SELECT c.case_code, c.case_name, c.is_virtual
         FROM cases c
-        WHERE c.is_active=1
+        WHERE c.is_active=1 AND c.location_id=?
         {case_order_sql()}
-        """
+        """,
+        (location_id,),
     ).fetchall()
 
     if request.method == "POST":
@@ -1856,6 +2167,7 @@ def missing():
 @login_required
 def history():
     db = get_db()
+    location_id = current_location_id()
     report_type = (request.args.get("report") or "events").strip().lower()
     if report_type not in ("events", "counts"):
         report_type = "events"
@@ -1866,12 +2178,13 @@ def history():
     date = (request.args.get("date") or "").strip()  # YYYY-MM-DD (store-local) for counts
 
     active_cases = db.execute(
-        f"SELECT c.* FROM cases c WHERE c.is_active=1 {case_order_sql()}"
+        f"SELECT c.* FROM cases c WHERE c.is_active=1 AND c.location_id=? {case_order_sql()}",
+        (location_id,),
     ).fetchall()
 
     if report_type == "counts":
-        sql = "SELECT * FROM case_counts WHERE 1=1"
-        params = []
+        sql = "SELECT * FROM case_counts WHERE location_id=?"
+        params = [location_id]
         if case_code:
             sql += " AND case_code=?"
             params.append(case_code)
@@ -1897,8 +2210,13 @@ def history():
             user=current_user(),
         )
 
-    sql = "SELECT h.*, p.item_type FROM history h LEFT JOIN products p ON p.upc = h.upc WHERE 1=1"
-    params = []
+    sql = """
+        SELECT h.*, p.item_type
+        FROM history h
+        LEFT JOIN products p ON p.upc = h.upc
+        WHERE h.location_id=?
+    """
+    params = [location_id]
     if case_code:
         sql += " AND (h.from_case_code=? OR h.to_case_code=?)"
         params.extend([case_code, case_code])
@@ -1932,6 +2250,7 @@ def history():
 def export_inventory():
     """Export current inventory (by case/upc/qty)."""
     db = get_db()
+    location_id = current_location_id()
     rows = db.execute(
         """
         SELECT
@@ -1945,9 +2264,10 @@ def export_inventory():
         FROM inventory i
         JOIN cases c ON c.case_code = i.case_code
         LEFT JOIN products p ON p.upc = i.upc
-        WHERE c.is_active = 1 AND i.qty > 0
+        WHERE c.is_active = 1 AND i.qty > 0 AND c.location_id = ?
         ORDER BY i.case_code, i.location, i.upc
-        """
+        """,
+        (location_id,),
     ).fetchall()
 
     import io, csv
@@ -1970,8 +2290,10 @@ def export_inventory():
 def export_case(case_code):
     """Export inventory for a single case."""
     db = get_db()
+    location_id = current_location_id()
     c = db.execute(
-        "SELECT case_code, case_name FROM cases WHERE case_code=? AND is_active=1", (case_code,)
+        "SELECT case_code, case_name FROM cases WHERE case_code=? AND is_active=1 AND location_id=?",
+        (case_code, location_id),
     ).fetchone()
     if not c:
         abort(404)
@@ -2008,6 +2330,7 @@ def export_case(case_code):
 @login_required
 def export_history():
     db = get_db()
+    location_id = current_location_id()
     report_type = (request.args.get("report") or "events").strip().lower()
     if report_type not in ("events", "counts"):
         report_type = "events"
@@ -2020,8 +2343,8 @@ def export_history():
     import io, csv
 
     if report_type == "counts":
-        sql = "SELECT * FROM case_counts WHERE 1=1"
-        params = []
+        sql = "SELECT * FROM case_counts WHERE location_id=?"
+        params = [location_id]
         if case_code:
             sql += " AND case_code=?"
             params.append(case_code)
@@ -2066,8 +2389,8 @@ def export_history():
             headers={"Content-Disposition": "attachment; filename=counts_history.csv"},
         )
 
-    sql = "SELECT h.*, p.item_type FROM history h LEFT JOIN products p ON p.upc = h.upc WHERE 1=1"
-    params = []
+    sql = "SELECT h.*, p.item_type FROM history h LEFT JOIN products p ON p.upc = h.upc WHERE h.location_id=?"
+    params = [location_id]
     if case_code:
         sql += " AND (h.from_case_code=? OR h.to_case_code=?)"
         params.extend([case_code, case_code])
@@ -2104,11 +2427,15 @@ def export_history():
 @role_required(ROLE_ADMIN)
 def users():
     db = get_db()
+    locations = db.execute(
+        "SELECT id, name FROM locations WHERE is_active=1 ORDER BY name"
+    ).fetchall()
 
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = request.form.get("password") or ""
         role = (request.form.get("role") or ROLE_STAFF).strip()
+        location_id_raw = (request.form.get("location_id") or "").strip() or None
 
         if not username:
             flash("Username is required.", "danger")
@@ -2119,14 +2446,36 @@ def users():
         if role not in (ROLE_ADMIN, ROLE_STAFF):
             role = ROLE_STAFF
 
+        location_id = None
+        if location_id_raw:
+            try:
+                location_id = int(location_id_raw)
+            except ValueError:
+                flash("Choose a valid location.", "danger")
+                return redirect(url_for("users"))
+        if role == ROLE_STAFF and not location_id:
+            flash("Staff users must have a location.", "danger")
+            return redirect(url_for("users"))
+        if location_id:
+            exists = db.execute(
+                "SELECT id FROM locations WHERE id=? AND is_active=1",
+                (location_id,),
+            ).fetchone()
+            if not exists:
+                flash("Choose a valid location.", "danger")
+                return redirect(url_for("users"))
+
         existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if existing:
             flash("That username already exists.", "danger")
             return redirect(url_for("users"))
 
         db.execute(
-            "INSERT INTO users (username, password_hash, role, is_active, created_at) VALUES (?,?,?,?,?)",
-            (username, generate_password_hash(password), role, 1, utc_now()),
+            """
+            INSERT INTO users (username, password_hash, role, is_active, location_id, created_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (username, generate_password_hash(password), role, 1, location_id, utc_now()),
         )
         db.commit()
         log_history(ACTION_USER_CREATE, notes=f"Created user {username} ({role})")
@@ -2134,9 +2483,19 @@ def users():
         return redirect(url_for("users"))
 
     rows = db.execute(
-        "SELECT id, username, role, is_active, created_at FROM users ORDER BY id"
+        """
+        SELECT u.id, u.username, u.role, u.is_active, u.created_at, l.name AS location_name
+        FROM users u
+        LEFT JOIN locations l ON l.id = u.location_id
+        ORDER BY u.id
+        """
     ).fetchall()
-    return render_template("users.html", rows=rows, user=current_user())
+    return render_template(
+        "users.html",
+        rows=rows,
+        locations=locations,
+        user=current_user(),
+    )
 
 
 @app.route("/admin/users/<int:user_id>/disable", methods=["POST"])
@@ -2161,8 +2520,10 @@ def disable_user(user_id: int):
 def daily_activity_reports():
     # Choose date and case, then download report
     db = get_db()
+    location_id = current_location_id()
     cases = db.execute(
-        "SELECT case_code, case_name FROM cases WHERE is_active = 1 ORDER BY case_code"
+        "SELECT case_code, case_name FROM cases WHERE is_active = 1 AND location_id = ? ORDER BY case_code",
+        (location_id,),
     ).fetchall()
     # default date in store local
     default_date = local_date_str()
@@ -2183,11 +2544,15 @@ def download_daily_activity_report(case_code):
 
     # Ensure case exists
     db = get_db()
-    c = db.execute("SELECT case_code, case_name FROM cases WHERE case_code = ? AND is_active = 1", (case_code,)).fetchone()
+    location_id = current_location_id()
+    c = db.execute(
+        "SELECT case_code, case_name FROM cases WHERE case_code = ? AND is_active = 1 AND location_id = ?",
+        (case_code, location_id),
+    ).fetchone()
     if not c:
         abort(404)
 
-    wb = build_daily_activity_workbook(case_code, date_q)
+    wb = build_daily_activity_workbook(case_code, date_q, location_id)
 
     import io
     bio = io.BytesIO()
@@ -2213,14 +2578,15 @@ def download_daily_count_report(case_code):
         date_q = f"{yyyy}-{mm}-{dd}"
 
     db = get_db()
+    location_id = current_location_id()
     c = db.execute(
-        "SELECT case_code, case_name FROM cases WHERE case_code = ? AND is_active = 1",
-        (case_code,),
+        "SELECT case_code, case_name FROM cases WHERE case_code = ? AND is_active = 1 AND location_id = ?",
+        (case_code, location_id),
     ).fetchone()
     if not c:
         abort(404)
 
-    wb = build_daily_count_workbook(case_code, date_q)
+    wb = build_daily_count_workbook(case_code, date_q, location_id)
 
     import io
     bio = io.BytesIO()
