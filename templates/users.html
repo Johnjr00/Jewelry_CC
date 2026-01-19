@@ -6,11 +6,11 @@
   <div class="text-white-50 mb-3">Create staff logins. Passwords must be 8+ characters.</div>
 
   <form method="post" class="row g-2">
-    <div class="col-12 col-md-4">
+    <div class="col-12 col-md-3">
       <label class="form-label text-white-50">Username</label>
       <input class="form-control" name="username" required>
     </div>
-    <div class="col-12 col-md-4">
+    <div class="col-12 col-md-3">
       <label class="form-label text-white-50">Password</label>
       <input class="form-control" type="password" name="password" required>
     </div>
@@ -21,7 +21,17 @@
         <option value="admin">admin</option>
       </select>
     </div>
-    <div class="col-12 col-md-2 d-flex align-items-end">
+    <div class="col-12 col-md-3">
+      <label class="form-label text-white-50">Location</label>
+      <select class="form-select" name="location_id">
+        <option value="">Select location</option>
+        {% for location in locations %}
+          <option value="{{ location.id }}">{{ location.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="text-white-50 small mt-1">Required for staff. Optional for admins.</div>
+    </div>
+    <div class="col-12 col-md-1 d-flex align-items-end">
       <button class="btn btn-success w-100">Create</button>
     </div>
   </form>
@@ -37,6 +47,7 @@
           <th>ID</th>
           <th>Username</th>
           <th>Role</th>
+          <th>Location</th>
           <th>Active</th>
           <th>Created</th>
           <th></th>
@@ -48,6 +59,7 @@
           <td class="text-white-50 small">{{ u.id }}</td>
           <td>{{ u.username }}</td>
           <td><span class="chip">{{ u.role }}</span></td>
+          <td class="text-white-50 small">{{ u.location_name or "—" }}</td>
           <td class="small">{{ "Yes" if u.is_active==1 else "No" }}</td>
           <td class="text-white-50 small">{{ u.created_at }}</td>
           <td class="text-end">
@@ -60,7 +72,7 @@
         </tr>
         {% endfor %}
         {% if rows|length == 0 %}
-          <tr><td colspan="6" class="text-white-50">No users.</td></tr>
+          <tr><td colspan="7" class="text-white-50">No users.</td></tr>
         {% endif %}
       </tbody>
     </table>
