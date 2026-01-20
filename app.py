@@ -162,7 +162,8 @@ def get_db() -> sqlite3.Connection:
                 conn.execute("ALTER TABLE users ADD COLUMN location_id INTEGER")
                 conn.execute("UPDATE users SET location_id=? WHERE location_id IS NULL", (default_location_id,))
 
-            case_cols = [r["name"] for r in conn.execute("PRAGMA table_info(cases)").fetchall()]
+            case_info = conn.execute("PRAGMA table_info(cases)").fetchall()
+            case_cols = [r["name"] for r in case_info]
             if "location_id" not in case_cols:
                 conn.execute("ALTER TABLE cases ADD COLUMN location_id INTEGER")
                 conn.execute("UPDATE cases SET location_id=? WHERE location_id IS NULL", (default_location_id,))
@@ -201,36 +202,167 @@ def get_db() -> sqlite3.Connection:
                         reserve_other=0
                     """
                 )
-        except sqlite3.OperationalError:
-            pass
 
-        try:
-            inv_cols = [r["name"] for r in conn.execute("PRAGMA table_info(inventory)").fetchall()]
-            if "location" not in inv_cols:
-                conn.execute("ALTER TABLE inventory RENAME TO inventory_old;")
+            case_pk = {r["name"]: r["pk"] for r in case_info}
+            if case_pk.get("location_id", 0) == 0:
+                conn.execute("PRAGMA foreign_keys = OFF;")
+                conn.execute("ALTER TABLE cases RENAME TO cases_old;")
                 conn.execute(
                     """
-                    CREATE TABLE inventory (
+                    CREATE TABLE cases (
                         case_code TEXT NOT NULL,
-                        upc TEXT NOT NULL,
-                        location TEXT NOT NULL DEFAULT 'CASE' CHECK(location IN ('CASE','RESERVE')),
-                        qty INTEGER NOT NULL CHECK(qty >= 0),
-                        PRIMARY KEY(case_code, upc, location),
-                        FOREIGN KEY(case_code) REFERENCES cases(case_code),
-                        FOREIGN KEY(upc) REFERENCES products(upc)
+                        location_id INTEGER NOT NULL,
+                        case_name TEXT NOT NULL,
+                        is_virtual INTEGER NOT NULL DEFAULT 0,
+                        is_active INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL,
+                        PRIMARY KEY(case_code, location_id),
+                        FOREIGN KEY(location_id) REFERENCES locations(id)
                     );
                     """
                 )
                 conn.execute(
                     """
-                    INSERT INTO inventory (case_code, upc, location, qty)
-                    SELECT case_code, upc, 'CASE', qty FROM inventory_old;
+                    INSERT INTO cases (case_code, location_id, case_name, is_virtual, is_active, created_at)
+                    SELECT case_code, location_id, case_name, is_virtual, is_active, created_at
+                    FROM cases_old;
                     """
                 )
+                conn.execute("DROP TABLE cases_old;")
+                conn.execute("PRAGMA foreign_keys = ON;")
+
+            count_fks = conn.execute("PRAGMA foreign_key_list(case_counts)").fetchall()
+            needs_case_counts_fk = not any(
+                fk["table"] == "cases" and fk["from"] == "location_id" for fk in count_fks
+            )
+            if needs_case_counts_fk:
+                conn.execute("PRAGMA foreign_keys = OFF;")
+                conn.execute("ALTER TABLE case_counts RENAME TO case_counts_old;")
+                conn.execute(
+                    """
+                    CREATE TABLE case_counts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ts_utc TEXT NOT NULL,
+                        local_date TEXT NOT NULL,
+                        case_code TEXT NOT NULL,
+                        location_id INTEGER NOT NULL,
+                        user_id INTEGER,
+                        username TEXT,
+                        bracelets INTEGER NOT NULL CHECK(bracelets >= 0),
+                        rings INTEGER NOT NULL CHECK(rings >= 0),
+                        earrings INTEGER NOT NULL CHECK(earrings >= 0),
+                        necklaces INTEGER NOT NULL CHECK(necklaces >= 0),
+                        other INTEGER NOT NULL DEFAULT 0 CHECK(other >= 0),
+                        reserve_bracelets INTEGER NOT NULL DEFAULT 0 CHECK(reserve_bracelets >= 0),
+                        reserve_rings INTEGER NOT NULL DEFAULT 0 CHECK(reserve_rings >= 0),
+                        reserve_earrings INTEGER NOT NULL DEFAULT 0 CHECK(reserve_earrings >= 0),
+                        reserve_necklaces INTEGER NOT NULL DEFAULT 0 CHECK(reserve_necklaces >= 0),
+                        reserve_other INTEGER NOT NULL DEFAULT 0 CHECK(reserve_other >= 0),
+                        total INTEGER NOT NULL CHECK(total >= 0),
+                        notes TEXT,
+                        FOREIGN KEY(case_code, location_id) REFERENCES cases(case_code, location_id),
+                        FOREIGN KEY(location_id) REFERENCES locations(id),
+                        FOREIGN KEY(user_id) REFERENCES users(id)
+                    );
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO case_counts (
+                        id, ts_utc, local_date, case_code, location_id, user_id, username,
+                        bracelets, rings, earrings, necklaces, other,
+                        reserve_bracelets, reserve_rings, reserve_earrings, reserve_necklaces, reserve_other,
+                        total, notes
+                    )
+                    SELECT
+                        id, ts_utc, local_date, case_code, location_id, user_id, username,
+                        bracelets, rings, earrings, necklaces, other,
+                        reserve_bracelets, reserve_rings, reserve_earrings, reserve_necklaces, reserve_other,
+                        total, notes
+                    FROM case_counts_old;
+                    """
+                )
+                conn.execute("DROP TABLE case_counts_old;")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_case_counts_date_case ON case_counts(local_date, case_code, location_id);"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_case_counts_case ON case_counts(case_code, location_id);"
+                )
+                conn.execute("PRAGMA foreign_keys = ON;")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            inv_info = conn.execute("PRAGMA table_info(inventory)").fetchall()
+            inv_cols = [r["name"] for r in inv_info]
+            inv_pk = {r["name"]: r["pk"] for r in inv_info}
+            needs_inventory_rebuild = (
+                "location_id" not in inv_cols
+                or inv_pk.get("location_id", 0) == 0
+                or inv_pk.get("case_code", 0) == 0
+                or inv_pk.get("upc", 0) == 0
+                or inv_pk.get("location", 0) == 0
+            )
+            if needs_inventory_rebuild:
+                conn.execute("PRAGMA foreign_keys = OFF;")
+                conn.execute("ALTER TABLE inventory RENAME TO inventory_old;")
+                conn.execute(
+                    """
+                    CREATE TABLE inventory (
+                        case_code TEXT NOT NULL,
+                        location_id INTEGER NOT NULL,
+                        upc TEXT NOT NULL,
+                        location TEXT NOT NULL DEFAULT 'CASE' CHECK(location IN ('CASE','RESERVE')),
+                        qty INTEGER NOT NULL CHECK(qty >= 0),
+                        PRIMARY KEY(case_code, location_id, upc, location),
+                        FOREIGN KEY(case_code, location_id) REFERENCES cases(case_code, location_id),
+                        FOREIGN KEY(upc) REFERENCES products(upc)
+                    );
+                    """
+                )
+                if "location" in inv_cols:
+                    if "location_id" in inv_cols:
+                        conn.execute(
+                            """
+                            INSERT INTO inventory (case_code, location_id, upc, location, qty)
+                            SELECT case_code, location_id, upc, location, qty
+                            FROM inventory_old;
+                            """
+                        )
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO inventory (case_code, location_id, upc, location, qty)
+                            SELECT inv.case_code,
+                                   COALESCE(c.location_id, ?) AS location_id,
+                                   inv.upc,
+                                   inv.location,
+                                   inv.qty
+                            FROM inventory_old inv
+                            LEFT JOIN cases c ON c.case_code = inv.case_code;
+                            """,
+                            (default_location_id,),
+                        )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO inventory (case_code, location_id, upc, location, qty)
+                        SELECT inv.case_code,
+                               COALESCE(c.location_id, ?) AS location_id,
+                               inv.upc,
+                               'CASE' AS location,
+                               inv.qty
+                        FROM inventory_old inv
+                        LEFT JOIN cases c ON c.case_code = inv.case_code;
+                        """,
+                        (default_location_id,),
+                    )
                 conn.execute("DROP TABLE inventory_old;")
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_case ON inventory(case_code);")
+                conn.execute("PRAGMA foreign_keys = ON;")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_case ON inventory(case_code, location_id);")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_upc ON inventory(upc);")
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_case_location ON inventory(case_code, location);")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_case_location ON inventory(case_code, location_id, location);")
         except sqlite3.OperationalError:
             pass
 
@@ -328,12 +460,13 @@ def init_db():
         );
 
         CREATE TABLE IF NOT EXISTS cases (
-            case_code TEXT PRIMARY KEY,
+            case_code TEXT NOT NULL,
             location_id INTEGER NOT NULL,
             case_name TEXT NOT NULL,
             is_virtual INTEGER NOT NULL DEFAULT 0,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
+            PRIMARY KEY(case_code, location_id),
             FOREIGN KEY(location_id) REFERENCES locations(id)
         );
 
@@ -344,11 +477,12 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS inventory (
             case_code TEXT NOT NULL,
+            location_id INTEGER NOT NULL,
             upc TEXT NOT NULL,
             location TEXT NOT NULL DEFAULT 'CASE' CHECK(location IN ('CASE','RESERVE')),
             qty INTEGER NOT NULL CHECK(qty >= 0),
-            PRIMARY KEY(case_code, upc, location),
-            FOREIGN KEY(case_code) REFERENCES cases(case_code),
+            PRIMARY KEY(case_code, location_id, upc, location),
+            FOREIGN KEY(case_code, location_id) REFERENCES cases(case_code, location_id),
             FOREIGN KEY(upc) REFERENCES products(upc)
         );
 
@@ -384,13 +518,13 @@ CREATE TABLE IF NOT EXISTS case_counts (
     reserve_other INTEGER NOT NULL DEFAULT 0 CHECK(reserve_other >= 0),
     total INTEGER NOT NULL CHECK(total >= 0),
     notes TEXT,
-    FOREIGN KEY(case_code) REFERENCES cases(case_code),
+    FOREIGN KEY(case_code, location_id) REFERENCES cases(case_code, location_id),
     FOREIGN KEY(location_id) REFERENCES locations(id),
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_case_counts_date_case ON case_counts(local_date, case_code);
-CREATE INDEX IF NOT EXISTS idx_case_counts_case ON case_counts(case_code);
+CREATE INDEX IF NOT EXISTS idx_case_counts_date_case ON case_counts(local_date, case_code, location_id);
+CREATE INDEX IF NOT EXISTS idx_case_counts_case ON case_counts(case_code, location_id);
 
         CREATE TABLE IF NOT EXISTS history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -413,9 +547,9 @@ CREATE INDEX IF NOT EXISTS idx_case_counts_case ON case_counts(case_code);
     FOREIGN KEY(location_id) REFERENCES locations(id)
 );
 
-        CREATE INDEX IF NOT EXISTS idx_inv_case ON inventory(case_code);
+        CREATE INDEX IF NOT EXISTS idx_inv_case ON inventory(case_code, location_id);
         CREATE INDEX IF NOT EXISTS idx_inv_upc ON inventory(upc);
-        CREATE INDEX IF NOT EXISTS idx_inv_case_location ON inventory(case_code, location);
+        CREATE INDEX IF NOT EXISTS idx_inv_case_location ON inventory(case_code, location_id, location);
         CREATE INDEX IF NOT EXISTS idx_hist_upc ON history(upc);
         CREATE INDEX IF NOT EXISTS idx_hist_case_from ON history(from_case_code);
         CREATE INDEX IF NOT EXISTS idx_hist_case_to ON history(to_case_code);
@@ -960,7 +1094,7 @@ def counts():
                COALESCE(SUM(i.qty), 0) AS total_qty,
                COALESCE(COUNT(DISTINCT i.upc), 0) AS distinct_upcs
         FROM cases c
-        LEFT JOIN inventory i ON i.case_code = c.case_code
+        LEFT JOIN inventory i ON i.case_code = c.case_code AND i.location_id = c.location_id
         WHERE c.is_active = 1 AND c.location_id = ?
         GROUP BY c.case_code
         {case_order_sql()}
@@ -986,9 +1120,9 @@ def counts():
 
     sys_totals = {
         c["case_code"]: {
-            "case": case_type_totals(c["case_code"], LOCATION_CASE),
-            "reserve": case_type_totals(c["case_code"], LOCATION_RESERVE),
-            "combined": case_type_totals(c["case_code"]),
+            "case": case_type_totals(c["case_code"], LOCATION_CASE, location_id),
+            "reserve": case_type_totals(c["case_code"], LOCATION_RESERVE, location_id),
+            "combined": case_type_totals(c["case_code"], location_id=location_id),
         }
         for c in cases
     }
@@ -1024,9 +1158,9 @@ def count_case(case_code: str):
         return redirect(url_for("counts"))
 
     today = local_date_str()
-    sys_case = case_type_totals(case_code, LOCATION_CASE)
-    sys_reserve = case_type_totals(case_code, LOCATION_RESERVE)
-    sys_combined = case_type_totals(case_code)
+    sys_case = case_type_totals(case_code, LOCATION_CASE, location_id)
+    sys_reserve = case_type_totals(case_code, LOCATION_RESERVE, location_id)
+    sys_combined = case_type_totals(case_code, location_id=location_id)
 
     last_count = db.execute(
         """
@@ -1202,27 +1336,45 @@ def upsert_product(upc: str, description: Optional[str], item_type: Optional[str
         )
 
 
-def add_qty(case_code: str, upc: str, qty: int, location: str = LOCATION_CASE):
+def add_qty(
+    case_code: str,
+    upc: str,
+    qty: int,
+    location: str = LOCATION_CASE,
+    location_id: Optional[int] = None,
+):
     db = get_db()
+    location_id = location_id or current_location_id()
+    if not location_id:
+        raise ValueError("location_id is required for inventory updates")
     if location not in INVENTORY_LOCATIONS:
         location = LOCATION_CASE
     db.execute(
         """
-        INSERT INTO inventory (case_code, upc, location, qty)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(case_code, upc, location) DO UPDATE SET qty = qty + excluded.qty
+        INSERT INTO inventory (case_code, location_id, upc, location, qty)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(case_code, location_id, upc, location) DO UPDATE SET qty = qty + excluded.qty
         """,
-        (case_code, upc, location, qty),
+        (case_code, location_id, upc, location, qty),
     )
 
 
-def remove_qty(case_code: str, upc: str, qty: int, location: str = LOCATION_CASE) -> Tuple[bool, int]:
+def remove_qty(
+    case_code: str,
+    upc: str,
+    qty: int,
+    location: str = LOCATION_CASE,
+    location_id: Optional[int] = None,
+) -> Tuple[bool, int]:
     db = get_db()
+    location_id = location_id or current_location_id()
+    if not location_id:
+        raise ValueError("location_id is required for inventory updates")
     if location not in INVENTORY_LOCATIONS:
         location = LOCATION_CASE
     row = db.execute(
-        "SELECT qty FROM inventory WHERE case_code=? AND upc=? AND location=?",
-        (case_code, upc, location),
+        "SELECT qty FROM inventory WHERE case_code=? AND location_id=? AND upc=? AND location=?",
+        (case_code, location_id, upc, location),
     ).fetchone()
     if not row:
         return False, 0
@@ -1232,11 +1384,14 @@ def remove_qty(case_code: str, upc: str, qty: int, location: str = LOCATION_CASE
 
     new_qty = have - qty
     if new_qty == 0:
-        db.execute("DELETE FROM inventory WHERE case_code=? AND upc=? AND location=?", (case_code, upc, location))
+        db.execute(
+            "DELETE FROM inventory WHERE case_code=? AND location_id=? AND upc=? AND location=?",
+            (case_code, location_id, upc, location),
+        )
     else:
         db.execute(
-            "UPDATE inventory SET qty=? WHERE case_code=? AND upc=? AND location=?",
-            (new_qty, case_code, upc, location),
+            "UPDATE inventory SET qty=? WHERE case_code=? AND location_id=? AND upc=? AND location=?",
+            (new_qty, case_code, location_id, upc, location),
         )
     return True, new_qty
 
@@ -1254,15 +1409,23 @@ def case_order_sql() -> str:
         END,
         c.case_code
     """
-def _validate_have_qty(case_code: str, upc_map: Dict[str, int], location: str = LOCATION_CASE) -> list[str]:
+def _validate_have_qty(
+    case_code: str,
+    upc_map: Dict[str, int],
+    location: str = LOCATION_CASE,
+    location_id: Optional[int] = None,
+) -> list[str]:
     db = get_db()
+    location_id = location_id or current_location_id()
+    if not location_id:
+        raise ValueError("location_id is required for inventory updates")
     if location not in INVENTORY_LOCATIONS:
         location = LOCATION_CASE
     problems = []
     for upc, need in upc_map.items():
         row = db.execute(
-            "SELECT qty FROM inventory WHERE case_code=? AND upc=? AND location=?",
-            (case_code, upc, location),
+            "SELECT qty FROM inventory WHERE case_code=? AND location_id=? AND upc=? AND location=?",
+            (case_code, location_id, upc, location),
         ).fetchone()
         have = int(row["qty"]) if row else 0
         if have < need:
@@ -1270,9 +1433,16 @@ def _validate_have_qty(case_code: str, upc_map: Dict[str, int], location: str = 
     return problems
 
 
-def case_type_totals(case_code: str, location: Optional[str] = None) -> dict:
+def case_type_totals(
+    case_code: str,
+    location: Optional[str] = None,
+    location_id: Optional[int] = None,
+) -> dict:
     """Compute live totals for a case, grouped by item_type."""
     db = get_db()
+    location_id = location_id or current_location_id()
+    if not location_id:
+        raise ValueError("location_id is required for inventory lookups")
     pieces = []
     params = []
     for category in ITEM_CATEGORIES:
@@ -1287,9 +1457,10 @@ def case_type_totals(case_code: str, location: Optional[str] = None) -> dict:
           {", ".join(pieces)}
         FROM inventory inv
         LEFT JOIN products p ON p.upc = inv.upc
-        WHERE inv.case_code = ?
+        WHERE inv.case_code = ? AND inv.location_id = ?
         """
     params.append(case_code)
+    params.append(location_id)
     if location in INVENTORY_LOCATIONS:
         sql += " AND inv.location = ?"
         params.append(location)
@@ -1475,7 +1646,7 @@ def index():
                COALESCE(SUM(i.qty), 0) AS total_qty,
                COALESCE(COUNT(DISTINCT i.upc), 0) AS distinct_upcs
         FROM cases c
-        LEFT JOIN inventory i ON i.case_code = c.case_code
+        LEFT JOIN inventory i ON i.case_code = c.case_code AND i.location_id = c.location_id
         WHERE c.is_active = 1 AND c.location_id = ?
         GROUP BY c.case_code
         {case_order_sql()}
@@ -1548,10 +1719,10 @@ def view_case(case_code: str):
         SELECT inv.upc, inv.qty, p.description, p.item_type
         FROM inventory inv
         LEFT JOIN products p ON p.upc = inv.upc
-        WHERE inv.case_code = ? AND inv.location = ?
+        WHERE inv.case_code = ? AND inv.location_id = ? AND inv.location = ?
         ORDER BY inv.upc
         """,
-        (case_code, LOCATION_CASE),
+        (case_code, location_id, LOCATION_CASE),
     ).fetchall()
 
     reserve_items = db.execute(
@@ -1559,42 +1730,42 @@ def view_case(case_code: str):
         SELECT inv.upc, inv.qty, p.description, p.item_type
         FROM inventory inv
         LEFT JOIN products p ON p.upc = inv.upc
-        WHERE inv.case_code = ? AND inv.location = ?
+        WHERE inv.case_code = ? AND inv.location_id = ? AND inv.location = ?
         ORDER BY inv.upc
         """,
-        (case_code, LOCATION_RESERVE),
+        (case_code, location_id, LOCATION_RESERVE),
     ).fetchall()
 
     totals = db.execute(
         """
         SELECT COALESCE(SUM(qty),0) AS total_qty, COALESCE(COUNT(DISTINCT upc),0) AS distinct_upcs
         FROM inventory
-        WHERE case_code=?
+        WHERE case_code=? AND location_id=?
         """,
-        (case_code,),
+        (case_code, location_id),
     ).fetchone()
 
     case_totals = db.execute(
         """
         SELECT COALESCE(SUM(qty),0) AS total_qty, COALESCE(COUNT(DISTINCT upc),0) AS distinct_upcs
         FROM inventory
-        WHERE case_code=? AND location=?
+        WHERE case_code=? AND location_id=? AND location=?
         """,
-        (case_code, LOCATION_CASE),
+        (case_code, location_id, LOCATION_CASE),
     ).fetchone()
 
     reserve_totals = db.execute(
         """
         SELECT COALESCE(SUM(qty),0) AS total_qty, COALESCE(COUNT(DISTINCT upc),0) AS distinct_upcs
         FROM inventory
-        WHERE case_code=? AND location=?
+        WHERE case_code=? AND location_id=? AND location=?
         """,
-        (case_code, LOCATION_RESERVE),
+        (case_code, location_id, LOCATION_RESERVE),
     ).fetchone()
 
-    case_type_totals_data = case_type_totals(case_code, LOCATION_CASE)
-    reserve_type_totals = case_type_totals(case_code, LOCATION_RESERVE)
-    combined_type_totals = case_type_totals(case_code)
+    case_type_totals_data = case_type_totals(case_code, LOCATION_CASE, location_id)
+    reserve_type_totals = case_type_totals(case_code, LOCATION_RESERVE, location_id)
+    combined_type_totals = case_type_totals(case_code, location_id=location_id)
 
     # Latest physical count for today (store-local)
     today = local_date_str()
@@ -1662,6 +1833,7 @@ def api_case_items(case_code: str):
     location = (request.args.get("location") or "").strip().upper()
     if location not in INVENTORY_LOCATIONS:
         location = LOCATION_CASE
+    location_id = current_location_id()
 
     db = get_db()
     rows = db.execute(
@@ -1669,10 +1841,10 @@ def api_case_items(case_code: str):
         SELECT inv.upc, inv.qty, p.description, p.item_type
         FROM inventory inv
         LEFT JOIN products p ON p.upc = inv.upc
-        WHERE inv.case_code = ? AND inv.location = ?
+        WHERE inv.case_code = ? AND inv.location_id = ? AND inv.location = ?
         ORDER BY inv.upc
         """,
-        (case_code, location),
+        (case_code, location_id, location),
     ).fetchall()
 
     items = [
@@ -1758,8 +1930,8 @@ def delete_case(case_code: str):
         """
         SELECT COALESCE(SUM(i.qty),0) AS t
         FROM inventory i
-        JOIN cases c ON c.case_code = i.case_code
-        WHERE i.case_code=? AND c.location_id=?
+        JOIN cases c ON c.case_code = i.case_code AND c.location_id = i.location_id
+        WHERE i.case_code=? AND i.location_id=?
         """,
         (case_code, location_id),
     ).fetchone()["t"]
@@ -2194,7 +2366,10 @@ def history():
         sql += " ORDER BY id DESC LIMIT 500"
         rows = db.execute(sql, params).fetchall()
         # Current system totals (used to show variance in the report)
-        sys_totals_counts = {r['case_code']: case_type_totals(r['case_code']) for r in rows}
+        sys_totals_counts = {
+            r["case_code"]: case_type_totals(r["case_code"], location_id=location_id)
+            for r in rows
+        }
 
         return render_template(
             "history.html",
@@ -2262,7 +2437,7 @@ def export_inventory():
           COALESCE(p.description,'') AS description,
           i.qty
         FROM inventory i
-        JOIN cases c ON c.case_code = i.case_code
+        JOIN cases c ON c.case_code = i.case_code AND c.location_id = i.location_id
         LEFT JOIN products p ON p.upc = i.upc
         WHERE c.is_active = 1 AND i.qty > 0 AND c.location_id = ?
         ORDER BY i.case_code, i.location, i.upc
@@ -2307,10 +2482,10 @@ def export_case(case_code):
                i.qty
         FROM inventory i
         LEFT JOIN products p ON p.upc = i.upc
-        WHERE i.case_code = ? AND i.qty > 0
+        WHERE i.case_code = ? AND i.location_id = ? AND i.qty > 0
         ORDER BY i.location, i.upc
         """,
-        (case_code,),
+        (case_code, location_id),
     ).fetchall()
 
     import io, csv
