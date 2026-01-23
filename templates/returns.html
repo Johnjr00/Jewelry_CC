@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="glass p-3 p-md-4" style="max-width: 980px;">
+  <div class="fw-bold fs-4">Returns → Returns Case</div>
+  <div class="text-white-50 mb-3">
+    Log customer returns here. Returned items are staged in the Returns virtual case before moving to the salesfloor.
+  </div>
+
+  <form method="post" class="row g-3">
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50">Return Transaction # (required)</label>
+      <input class="form-control" name="return_trans" placeholder="Transaction / receipt #" required>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50">Item Type (required)</label>
+      <select class="form-select" name="item_type" required>
+        <option value="">Choose…</option>
+        {% for t in item_types %}
+          <option value="{{ t }}">{{ t }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50">UPC (required)</label>
+      <div class="d-flex flex-column flex-md-row gap-2 align-items-start">
+        <input class="form-control mono" id="return-upc" name="upc" placeholder="Scan or enter UPC" required>
+        <button class="btn btn-outline-light align-self-start" type="button" data-upc-scan-target="return-upc">
+          Scan UPC
+        </button>
+      </div>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50">Return Price (required)</label>
+      <input class="form-control" name="price" placeholder="0.00" required>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <label class="form-label text-white-50">Diamond Tested? (required)</label>
+      <select class="form-select" name="diamond_test" required>
+        <option value="">Choose…</option>
+        <option value="Y">Y</option>
+        <option value="N">N</option>
+        <option value="N/A">N/A</option>
+      </select>
+    </div>
+
+    <div class="col-12">
+      <label class="form-label text-white-50">Description (required)</label>
+      <input class="form-control" name="description" placeholder="Metal, stones, size, etc." required>
+    </div>
+
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-success">Save Return</button>
+      <a class="btn btn-outline-light" href="{{ url_for('index') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

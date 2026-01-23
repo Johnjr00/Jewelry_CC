@@ -31,6 +31,8 @@ DAILY_COUNT_TEMPLATE = os.path.join(os.path.dirname(__file__), "Daily Count Shee
 
 NEW_RECEIPTS_CODE = "NEW-RECEIPTS"
 NEW_RECEIPTS_NAME = "New Receipts (Virtual)"
+RETURNS_CODE = "RETURNS"
+RETURNS_NAME = "Returns (Virtual)"
 
 STORE_TZ = ZoneInfo("America/Phoenix")
 
@@ -42,6 +44,7 @@ ACTION_RECEIVE = "RECEIVE"
 ACTION_MOVE = "MOVE"
 ACTION_SOLD = "SOLD"
 ACTION_MISSING = "MISSING"
+ACTION_RETURN = "RETURN"
 ACTION_CASE_CREATE = "CASE_CREATE"
 ACTION_CASE_DELETE = "CASE_DELETE"
 ACTION_CASE_EDIT = "CASE_EDIT"
@@ -102,12 +105,19 @@ COUNT_CATEGORIES = _sorted_item_categories("count_order")
 COUNT_FIELDS = [c["count_key"] for c in COUNT_CATEGORIES]
 RESERVE_COUNT_FIELDS = [f"reserve_{c['count_key']}" for c in COUNT_CATEGORIES]
 DIAMOND_TEST_OPTIONS = {"Y", "N", "NRT"}
+RETURN_DIAMOND_OPTIONS = {"Y", "N", "N/A"}
 LOCATION_CASE = "CASE"
 LOCATION_RESERVE = "RESERVE"
 INVENTORY_LOCATIONS = {LOCATION_CASE, LOCATION_RESERVE}
 
 app = Flask(__name__)
 app.secret_key = "change-this-in-production"
+
+
+def _virtual_case_code(base_code: str, location_id: Optional[int], default_location_id: Optional[int]) -> str:
+    if not location_id or location_id == default_location_id:
+        return base_code
+    return f"{base_code}-{location_id}"
 
 
 
@@ -156,6 +166,17 @@ def get_db() -> sqlite3.Connection:
                     "SELECT id FROM locations ORDER BY id LIMIT 1"
                 ).fetchone()
             default_location_id = default_location["id"]
+
+            locations = conn.execute("SELECT id FROM locations").fetchall()
+            for loc in locations:
+                returns_code = _virtual_case_code(RETURNS_CODE, loc["id"], default_location_id)
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO cases (case_code, location_id, case_name, is_virtual, is_active, created_at)
+                    VALUES (?, ?, ?, 1, 1, ?)
+                    """,
+                    (returns_code, loc["id"], RETURNS_NAME, utc_now()),
+                )
 
             user_cols = [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
             if "location_id" not in user_cols:
@@ -590,6 +611,16 @@ CREATE INDEX IF NOT EXISTS idx_case_counts_case ON case_counts(case_code, locati
         """,
         (NEW_RECEIPTS_CODE, default_location_id, NEW_RECEIPTS_NAME, utc_now()),
     )
+    locations = db.execute("SELECT id FROM locations").fetchall()
+    for loc in locations:
+        returns_code = _virtual_case_code(RETURNS_CODE, loc["id"], default_location_id)
+        db.execute(
+            """
+            INSERT OR IGNORE INTO cases (case_code, location_id, case_name, is_virtual, is_active, created_at)
+            VALUES (?, ?, ?, 1, 1, ?)
+            """,
+            (returns_code, loc["id"], RETURNS_NAME, utc_now()),
+        )
 
     # --- Lightweight migration for history SOLD fields (safe on existing DBs)
     try:
@@ -727,9 +758,16 @@ def new_receipts_case_code(location_id: Optional[int]) -> str:
     db = get_db()
     row = db.execute("SELECT id FROM locations ORDER BY id LIMIT 1").fetchone()
     default_location_id = row["id"] if row else None
-    if location_id == default_location_id:
-        return NEW_RECEIPTS_CODE
-    return f"{NEW_RECEIPTS_CODE}-{location_id}"
+    return _virtual_case_code(NEW_RECEIPTS_CODE, location_id, default_location_id)
+
+
+def returns_case_code(location_id: Optional[int]) -> str:
+    if not location_id:
+        return RETURNS_CODE
+    db = get_db()
+    row = db.execute("SELECT id FROM locations ORDER BY id LIMIT 1").fetchone()
+    default_location_id = row["id"] if row else None
+    return _virtual_case_code(RETURNS_CODE, location_id, default_location_id)
 
 
 @app.context_processor
@@ -772,6 +810,8 @@ def _reason_code(action: str) -> str:
         return "S"
     if a == "MISSING":
         return "D"  # closest match in template legend
+    if a == "RETURN":
+        return "R"
     return a[:3]
 
 def _parse_iso_to_store(value: str):
@@ -801,7 +841,7 @@ def _daily_activity_totals(case_code: str, local_date: str, location_id: int) ->
         """
         SELECT h.ts, h.action, h.qty, h.from_case_code, h.to_case_code
         FROM history h
-        WHERE h.action IN ('RECEIVE','MOVE','SOLD','MISSING')
+        WHERE h.action IN ('RECEIVE','MOVE','SOLD','MISSING','RETURN')
           AND h.location_id = ?
           AND (h.from_case_code = ? OR h.to_case_code = ?)
         ORDER BY h.ts ASC, h.id ASC
@@ -825,6 +865,11 @@ def _daily_activity_totals(case_code: str, local_date: str, location_id: int) ->
             else:
                 qty_out = qty
         elif action == "MOVE":
+            if e["to_case_code"] == case_code:
+                qty_in = qty
+            elif e["from_case_code"] == case_code:
+                qty_out = qty
+        elif action == "RETURN":
             if e["to_case_code"] == case_code:
                 qty_in = qty
             elif e["from_case_code"] == case_code:
@@ -876,7 +921,7 @@ def build_daily_activity_workbook(case_code: str, local_date: str, location_id: 
         FROM history h
         LEFT JOIN users u ON u.id = h.user_id
         LEFT JOIN products p ON p.upc = h.upc
-        WHERE h.action IN ('RECEIVE','MOVE','SOLD','MISSING')
+        WHERE h.action IN ('RECEIVE','MOVE','SOLD','MISSING','RETURN')
           AND h.location_id = ?
           AND (h.from_case_code = ? OR h.to_case_code = ?)
         ORDER BY h.ts ASC, h.id ASC
@@ -903,7 +948,7 @@ def build_daily_activity_workbook(case_code: str, local_date: str, location_id: 
         action = (e["action"] or "").upper()
 
         # DOCUMENT # / TRANS/REG (use SYS-id)
-        doc = (e["trans_reg"] or "").strip() if action == "SOLD" else ""
+        doc = (e["trans_reg"] or "").strip() if action in ("SOLD", "RETURN") else ""
         if not doc:
             doc = f"SYS-{e['id']}"
         ws.cell(row, 2).value = doc
@@ -915,7 +960,11 @@ def build_daily_activity_workbook(case_code: str, local_date: str, location_id: 
             bdesc = (e["brief_desc"] or "").strip()
             ws.cell(row, 4).value = f"{dept} - {bdesc}".strip(" -")
         else:
-            desc = (e["description"] or "").strip()
+            desc = ""
+            if action == "RETURN":
+                desc = (e["brief_desc"] or "").strip()
+            if not desc:
+                desc = (e["description"] or "").strip()
             if not desc:
                 desc = (e["item_type"] or "").strip().upper() or "ITEM"
             if action == "MOVE":
@@ -931,6 +980,8 @@ def build_daily_activity_workbook(case_code: str, local_date: str, location_id: 
         # TICKET PRICE
         if action == "SOLD":
             ws.cell(row, 7).value = e["ticket_price"]
+        elif action == "RETURN":
+            ws.cell(row, 7).value = e["ticket_price"]
         else:
             ws.cell(row, 7).value = None
 
@@ -939,6 +990,8 @@ def build_daily_activity_workbook(case_code: str, local_date: str, location_id: 
             ws.cell(row, 8).value = (e["diamond_test"] or "").strip().upper() or None
         elif action == "RECEIVE":
             ws.cell(row, 8).value = "NRT"
+        elif action == "RETURN":
+            ws.cell(row, 8).value = (e["diamond_test"] or "").strip().upper() or None
         else:
             ws.cell(row, 8).value = None
 
@@ -958,6 +1011,11 @@ def build_daily_activity_workbook(case_code: str, local_date: str, location_id: 
             else:
                 qty_out = qty
         elif action == "MOVE":
+            if e["to_case_code"] == case_code:
+                qty_in = qty
+            elif e["from_case_code"] == case_code:
+                qty_out = qty
+        elif action == "RETURN":
             if e["to_case_code"] == case_code:
                 qty_in = qty
             elif e["from_case_code"] == case_code:
@@ -1621,6 +1679,14 @@ def locations_admin():
             """,
             (new_receipts_code, location_id, NEW_RECEIPTS_NAME, utc_now()),
         )
+        returns_code = returns_case_code(location_id)
+        db.execute(
+            """
+            INSERT OR IGNORE INTO cases (case_code, location_id, case_name, is_virtual, is_active, created_at)
+            VALUES (?, ?, ?, 1, 1, ?)
+            """,
+            (returns_code, location_id, RETURNS_NAME, utc_now()),
+        )
         db.commit()
         flash("Location created.", "success")
         return redirect(url_for("locations_admin"))
@@ -2168,6 +2234,67 @@ def receive():
         return redirect(url_for("view_case", case_code=new_receipts_code))
 
     return render_template("receive.html", user=current_user(), item_types=ITEM_TYPES_ORDER)
+
+
+# ---------------- Returns ----------------
+@app.route("/returns", methods=["GET", "POST"])
+@login_required
+def returns():
+    location_id = current_location_id()
+    returns_code = returns_case_code(location_id)
+    if request.method == "POST":
+        trans_reg = (request.form.get("return_trans") or "").strip()
+        upc = (request.form.get("upc") or "").strip()
+        item_type = (request.form.get("item_type") or "").strip()
+        price_raw = (request.form.get("price") or "").strip()
+        diamond_test = (request.form.get("diamond_test") or "").strip().upper()
+        description = (request.form.get("description") or "").strip()
+
+        if not trans_reg or not upc or not price_raw or not description or not diamond_test:
+            flash("Return transaction #, UPC, price, diamond test, and description are required.", "danger")
+            return redirect(url_for("returns"))
+        if item_type not in ALLOWED_ITEM_TYPES:
+            flash(f"Select an item type ({', '.join(ITEM_TYPES_ORDER)}).", "danger")
+            return redirect(url_for("returns"))
+        if diamond_test not in RETURN_DIAMOND_OPTIONS:
+            flash("Select a diamond test value (Y, N, or N/A).", "danger")
+            return redirect(url_for("returns"))
+
+        try:
+            price = float(price_raw.replace("$", "").replace(",", ""))
+        except Exception:
+            flash("Price must be a valid number (example: 199.99).", "danger")
+            return redirect(url_for("returns"))
+
+        if not ensure_case_exists(returns_code):
+            db = get_db()
+            db.execute(
+                """
+                INSERT OR IGNORE INTO cases (case_code, location_id, case_name, is_virtual, is_active, created_at)
+                VALUES (?, ?, ?, 1, 1, ?)
+                """,
+                (returns_code, location_id, RETURNS_NAME, utc_now()),
+            )
+            db.commit()
+
+        upsert_product(upc, description, item_type=item_type)
+        add_qty(returns_code, upc, 1, LOCATION_CASE)
+        log_history(
+            ACTION_RETURN,
+            upc=upc,
+            qty=1,
+            to_case_code=returns_code,
+            notes="Return intake",
+            trans_reg=trans_reg,
+            brief_desc=description,
+            ticket_price=price,
+            diamond_test=diamond_test,
+        )
+
+        flash(f"Return added to {returns_code}.", "success")
+        return redirect(url_for("view_case", case_code=returns_code))
+
+    return render_template("returns.html", user=current_user(), item_types=ITEM_TYPES_ORDER)
 
 
 # ---------------- Bulk Move page ----------------
